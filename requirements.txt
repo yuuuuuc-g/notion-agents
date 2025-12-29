@@ -1,0 +1,11 @@
+langchain
+langchain-core
+langchain-openai
+langgraph
+streamlit
+chromadb
+sentence-transformers
+notion-client
+python-dotenv
+pypdf
+requests
