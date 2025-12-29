@@ -49,7 +49,7 @@ notion-prism-react/
 
 ### 🔄 工作流 (Workflow)
 
-```mermaid
+```
 graph TD
     User[用户输入 (文本/PDF)] --> Agent
     

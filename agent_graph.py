@@ -24,8 +24,11 @@ You are an autonomous Knowledge Manager Agent. Your goal is to maintain a high-q
     - After the tool executes successfully, reply to the user with "✅ Operation Complete" and the Notion Link provided by the tool output.
     - DO NOT ask for confirmation. Just do it.
 
-** formatting Rules**:
-- When calling `manage_notion_note`, ensure `content_markdown` is well-formatted Markdown (H1, H2, lists).
+**Formatting Rules (CRITICAL)**:
+- **Markdown is fully supported**: You MUST use standard Markdown formatting.
+- **Tables**: Use standard Markdown tables (`| Col1 | Col2 |`) for structured data. The system handles them perfectly.
+- **Rich Text**: Use `**bold**` for keywords, `code` for technical terms, and `[links](url)` for references.
+- **Headers**: Use H1 (#), H2 (##), H3 (###) to structure the note clearly.
 - `summary` is mandatory for vector indexing.
 """
 # 2. 初始化组件
@@ -83,3 +86,50 @@ def run_agent(user_input: str, pdf_text: str = None, thread_id: str = None):
             final_response = message.content
             
     return final_response
+
+
+# ==========================================
+# 🔌 本地运行入口 (CLI Mode)
+# ==========================================
+if __name__ == "__main__":
+    import uuid
+    import sys
+    
+    # 1. 生成一个固定的会话 ID，这样在这一轮运行中 Agent 有记忆
+    thread_id = str(uuid.uuid4())
+    
+    print("\n" + "="*50)
+    print(f"🤖 Notion Agent Terminal Mode")
+    print(f"🧵 Thread ID: {thread_id}")
+    print("💡 Tips: 输入 'exit', 'quit' 或按 Ctrl+C 退出")
+    print("="*50 + "\n")
+
+    while True:
+        try:
+            # 2. 获取用户输入
+            user_input = input("👤 You: ").strip()
+            
+            if not user_input:
+                continue
+                
+            if user_input.lower() in ["exit", "quit"]:
+                print("👋 Bye!")
+                break
+            
+            # 3. 调用 Agent (本地测试通常没有 PDF，传 None)
+            # run_agent 内部已经包含了打印日志的逻辑
+            response = run_agent(
+                user_input=user_input, 
+                pdf_text=None, 
+                thread_id=thread_id
+            )
+            
+            # 4. 打印最终回复 (run_agent 已经打印了过程，这里打印最终结果)
+            print(f"\n🤖 Agent:\n{response}\n")
+            print("-" * 50)
+            
+        except KeyboardInterrupt:
+            print("\n\n👋 User Interrupted. Bye!")
+            sys.exit(0)
+        except Exception as e:
+            print(f"\n❌ Error: {e}")

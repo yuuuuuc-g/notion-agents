@@ -9,8 +9,49 @@ from io import BytesIO
 
 st.set_page_config(page_title="ReAct Knowledge Agent", page_icon="⚡")
 
-st.title("⚡ Autonomous ReAct Agent")
-st.caption(" I search, I decide, I execute.")
+# 定义 CSS 动画样式
+# ---------------------------------------------------------
+# ✨ UI 标题配置 
+# ---------------------------------------------------------
+st.markdown("""
+    <style>
+    /* 定义xxx色流动动画 */
+    .gradient-text {
+        /* 这里改了颜色：从 嫩绿(#a8ff78) 到 薄荷青(#78ffd6) 再回到 嫩绿 */
+        background: linear-gradient(to right, #134e5e, #71b280, #134e5e);
+        background-size: 200% auto;
+        
+        /* 裁剪背景到文字 */
+        color: #000;
+        background-clip: text;
+        text-fill-color: transparent;
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        
+        /* 动画设置 */
+        animation: shine 5s linear infinite;
+        font-weight: bold;
+    }
+    
+    /* 副标题样式 (保持淡雅的青灰色) */
+    .caption-gradient {
+        background: linear-gradient(to right, #11998e, #38ef7d);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-size: 1.2em;
+        font-style: italic;
+    }
+
+    /* 动画关键帧 */
+    @keyframes shine {
+        to {
+            background-position: 200% center;
+        }
+    }
+    </style>
+""", unsafe_allow_html=True)
+st.markdown('<h1 class="gradient-text">🌱  Yuc\'s Notion Agent</h1>', unsafe_allow_html=True)
+st.markdown('<p class="caption-gradient">I search, I decide, I execute.</p>', unsafe_allow_html=True)
 
 # Session State
 if "messages" not in st.session_state:
@@ -48,11 +89,19 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
         st.error(f"PDF 提取错误: {e}")
         return ""
 
-uploaded_file = st.file_uploader("上传 PDF 文件（可选）", type=["pdf"])
+with st.sidebar:
+    st.header("🪵 upload file")  # 加个标题更好看
+    uploaded_file = st.file_uploader("", type=["pdf"])
+    
+    # 增加一个清空按钮，方便重置对话
+    if st.button("🥀 "):
+        st.session_state.messages = []
+        st.rerun()
 pdf_text = None
 if uploaded_file is not None:
     pdf_bytes = uploaded_file.read()
     pdf_text = extract_pdf_text(pdf_bytes)
+    st.sidebar.success(f"已加载: {uploaded_file.name}")
 
 if prompt := st.chat_input("Enter a note or topic..."):
     # 1. 显示用户输入
