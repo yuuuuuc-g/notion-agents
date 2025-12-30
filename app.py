@@ -1,12 +1,11 @@
+import sys
+import os
 import streamlit as st
 import uuid
 import warnings
-import sys
-import os
 import tempfile
 from ebooklib import epub
 from bs4 import BeautifulSoup
-from agent_graph import run_agent
 from pypdf import PdfReader
 from io import BytesIO
 
@@ -14,9 +13,6 @@ from io import BytesIO
 st.set_page_config(page_title="ReAct Knowledge Agent", page_icon="🌱")
 
 # 定义 CSS 动画样式
-# ---------------------------------------------------------
-# ✨ UI 标题配置 
-# ---------------------------------------------------------
 st.markdown("""
     <style>
     /* 定义xxx色流动动画 */
@@ -213,6 +209,7 @@ if prompt := st.chat_input("Enter a note or topic..."):
         print("file length:", len(file_content) if file_content else 0)
         with st.spinner("🤖 Agent is working (Searching -> Thinking -> Acting)..."):
             try:
+                from agent_graph import run_agent
                 response = run_agent(prompt, file_content, st.session_state.thread_id)
                 st.markdown(response)
                 st.session_state.messages.append(
