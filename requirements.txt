@@ -9,7 +9,7 @@ notion-client
 python-dotenv
 pypdf
 requests
-EbookLib
+ebookLib
 beautifulsoup4
 watchdog
 pysqlite3-binary
