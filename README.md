@@ -53,7 +53,7 @@ exocortex/
 
 ### 🔄 工作流 (Workflow)
 
-```mermaid
+```
 graph TD
     User[用户输入 (文本/文件)] --> Classifier{⚡ 任务分类}
     
