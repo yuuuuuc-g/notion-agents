@@ -1,4 +1,3 @@
-```markdown
 # 🧠 Exocortex (Notion-Prism-React)
 
 > **你的个人认知外延系统 (Your Personal Cognitive Extension)。**
@@ -182,7 +181,3 @@ Agent 遵循严格的 **标准作业程序 (SOP)**：
 
 MIT License.
 Designed for personal knowledge management and learning purposes.
-
-```
-
-```
