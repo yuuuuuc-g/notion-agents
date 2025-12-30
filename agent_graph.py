@@ -122,7 +122,7 @@ def run_agent(user_input: str, pdf_text: str = None, thread_id: str = None):
 # 🔌 本地运行入口 (CLI Mode)
 # ==========================================
 # 当直接运行此文件时，启动交互式命令行界面
-if __name__ == "__main__":
+# if __name__ == "__main__":
     import uuid
     import sys
     
