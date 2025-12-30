@@ -10,7 +10,13 @@ from agent_graph import run_agent
 from pypdf import PdfReader
 from io import BytesIO
 
-
+# Compatibility fix for some environments
+try:
+    __import__('pysqlite3')
+    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+except ImportError:
+    pass
+    
 st.set_page_config(page_title="ReAct Knowledge Agent", page_icon="🌱")
 
 # 定义 CSS 动画样式
