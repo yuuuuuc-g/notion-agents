@@ -7,7 +7,7 @@ from agent_graph import run_agent
 from pypdf import PdfReader
 from io import BytesIO
 
-st.set_page_config(page_title="ReAct Knowledge Agent", page_icon="⚡")
+st.set_page_config(page_title="ReAct Knowledge Agent", page_icon="🌱")
 
 # 定义 CSS 动画样式
 # ---------------------------------------------------------
@@ -50,7 +50,7 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
-st.markdown('<h1 class="gradient-text">🌱  Yuc\'s Notion Agent</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="gradient-text">  Yuc\'s Notion Agent</h1>', unsafe_allow_html=True)
 st.markdown('<p class="caption-gradient">I search, I decide, I execute.</p>', unsafe_allow_html=True)
 
 # Session State
@@ -90,10 +90,46 @@ def extract_pdf_text(pdf_bytes: bytes) -> str:
         return ""
 
 with st.sidebar:
-    st.header("🪵 upload file")  # 加个标题更好看
+    # 注入自定义 CSS 样式
+    st.markdown("""
+    <style>
+    /* 修改侧边栏整体背景色 */
+    [data-testid="stSidebar"] {
+        background-color: #f8f9fa;
+    }
+    
+    /* 美化 Upload File 标题 */
+    .sidebar-header {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: #2e7d32; /* 森林绿 */
+        margin-bottom: 0.5rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    /* 给上传组件加一个精致的卡片外框 */
+    .stFileUploader {
+        background-color: white;
+        padding: 15px;
+        border-radius: 15px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        border: 1px solid #ececec;
+    }
+
+    /* 隐藏原生的 "Drag and drop file here" 标签，让界面更干净 */
+    .st-emotion-cache-1ae8k9d {
+        color: #666;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    # 使用带有自定义样式的标题
+    st.markdown('<div class="sidebar-header"> 🪵 Upload file</div>', unsafe_allow_html=True)
+    
     uploaded_file = st.file_uploader("", type=["pdf"])
     
-    # 增加一个清空按钮，方便重置对话
+    # 清空按钮，方便重置对话
     if st.button("🥀 "):
         st.session_state.messages = []
         st.rerun()

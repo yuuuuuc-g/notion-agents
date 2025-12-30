@@ -59,7 +59,7 @@ def manage_notion_note(
     }
     
     # 2. 映射数据库 ID
-    # (确保你在 .env 里配了这些 ID，或者 notion_ops 里有默认回退)
+    # (确保 .env 里配了这些 ID，或者 notion_ops 里有默认回退)
     db_map = {
         "Spanish": notion_ops.DB_SPANISH_ID,
         "Tech": notion_ops.DB_TECH_ID,

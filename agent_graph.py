@@ -1,3 +1,10 @@
+"""
+Notion 知识管理 Agent 图定义
+
+本模块使用 LangGraph 构建一个自主的知识管理 Agent，负责维护高质量的 Notion 数据库。
+Agent 会自动检查重复内容，智能合并新旧信息，并支持 Markdown 格式化。
+"""
+
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage
@@ -5,7 +12,10 @@ from langchain_core.messages import SystemMessage
 from llm_core import get_llm
 from tools import tools_list
 
-# 1. 系统提示词 (Agent 的 SOP)
+# ==========================================
+# 系统提示词配置
+# ==========================================
+# Agent 的标准操作流程 (SOP)，定义了 Agent 的工作方式和决策逻辑
 SYSTEM_PROMPT = """
 You are an autonomous Knowledge Manager Agent. Your goal is to maintain a high-quality, non-duplicate Notion database.
 
@@ -29,14 +39,23 @@ You are an autonomous Knowledge Manager Agent. Your goal is to maintain a high-q
 - **Tables**: Use standard Markdown tables (`| Col1 | Col2 |`) for structured data. The system handles them perfectly.
 - **Rich Text**: Use `**bold**` for keywords, `code` for technical terms, and `[links](url)` for references.
 - **Headers**: Use H1 (#), H2 (##), H3 (###) to structure the note clearly.
+- **Highlight**: Use `==text==` to highlight important concepts (e.g., `==Key Insight==`).
+- **Callouts**: To create a highlighted box (Callout), start a blockquote with an emoji.
+    - Example: `> 💡 This is a tip` -> Renders as a Lightbulb Callout.
+    - Example: `> ⚠️ Warning` -> Renders as a Warning Callout.
+    - Example: `> This is a normal quote` -> Renders as a standard Quote block.
 - `summary` is mandatory for vector indexing.
 """
-# 2. 初始化组件
+
+# ==========================================
+# Agent 图初始化
+# ==========================================
+# 初始化 LLM 模型和记忆存储
 llm = get_llm()
 memory = MemorySaver()
 
-# 3. 创建 ReAct Agent (自动处理 Tool Calling 循环)
-# 这行代码替代了以前几十行的 add_node / add_edge
+# 创建 ReAct Agent 图
+# ReAct Agent 会自动处理 Tool Calling 循环，实现推理-行动-观察的循环
 graph = create_react_agent(
     model=llm,
     tools=tools_list,
@@ -47,23 +66,32 @@ def run_agent(user_input: str, pdf_text: str = None, thread_id: str = None):
     """
     运行 Agent 的封装函数
     
+    执行完整的 Agent 工作流程：接收用户输入，执行工具调用，返回最终响应。
+    支持 PDF 文本附加和会话记忆管理。
+    
     参数:
         user_input: 用户输入的文本
         pdf_text: 从 PDF 提取的文本（可选）
-        thread_id: 线程 ID（可选，用于会话记忆）
+        thread_id: 线程 ID（可选，用于会话记忆。如果为 None，会自动生成）
+    
+    返回:
+        str: Agent 的最终响应文本
     """
+    # 如果没有提供 thread_id，自动生成一个用于会话记忆
     if thread_id is None:
         import uuid
         thread_id = str(uuid.uuid4())
     
+    # 配置会话上下文
     config = {"configurable": {"thread_id": thread_id}}
     
-    # 构造用户消息：如果有 PDF 文本，将其附加到用户输入
+    # 构造完整的用户消息
+    # 如果有 PDF 文本，将其附加到用户输入后面
     full_user_message = user_input
     if pdf_text and pdf_text.strip():
         full_user_message = f"{user_input}\n\n--- PDF 内容 ---\n{pdf_text}"
     
-    # 构造初始消息
+    # 构造初始消息列表：系统提示词 + 用户消息
     inputs = {
         "messages": [
             SystemMessage(content=SYSTEM_PROMPT),
@@ -71,18 +99,20 @@ def run_agent(user_input: str, pdf_text: str = None, thread_id: str = None):
         ]
     }
     
-    # 执行图
+    # 执行 Agent 图，流式获取执行结果
     final_response = ""
-    print("🚀 Agent Starting...")
+    print("❯❯❯❯❯❯❯ Agent Starting...")
     
     for event in graph.stream(inputs, config, stream_mode="values"):
-        # 获取最新的一条消息
+        # 从事件中获取最新的一条消息
         message = event["messages"][-1]
         
-        # 打印日志 (可选)
+        # 处理工具调用和最终响应
         if hasattr(message, "tool_calls") and message.tool_calls:
+            # 打印工具调用日志
             print(f"🤖 Agent Calling Tool: {message.tool_calls[0]['name']}")
         elif hasattr(message, "content") and message.content:
+            # 保存最终响应内容
             final_response = message.content
             
     return final_response
@@ -91,11 +121,12 @@ def run_agent(user_input: str, pdf_text: str = None, thread_id: str = None):
 # ==========================================
 # 🔌 本地运行入口 (CLI Mode)
 # ==========================================
+# 当直接运行此文件时，启动交互式命令行界面
 if __name__ == "__main__":
     import uuid
     import sys
     
-    # 1. 生成一个固定的会话 ID，这样在这一轮运行中 Agent 有记忆
+    # 生成会话 ID，用于在整个 CLI 会话中保持 Agent 的记忆
     thread_id = str(uuid.uuid4())
     
     print("\n" + "="*50)
@@ -104,32 +135,37 @@ if __name__ == "__main__":
     print("💡 Tips: 输入 'exit', 'quit' 或按 Ctrl+C 退出")
     print("="*50 + "\n")
 
+    # 主循环：持续接收用户输入并执行
     while True:
         try:
-            # 2. 获取用户输入
+            # 获取用户输入
             user_input = input("👤 You: ").strip()
             
+            # 跳过空输入
             if not user_input:
                 continue
                 
+            # 处理退出命令
             if user_input.lower() in ["exit", "quit"]:
                 print("👋 Bye!")
                 break
             
-            # 3. 调用 Agent (本地测试通常没有 PDF，传 None)
-            # run_agent 内部已经包含了打印日志的逻辑
+            # 调用 Agent 处理用户输入
+            # 注意：CLI 模式下通常不处理 PDF，所以 pdf_text 传 None
             response = run_agent(
                 user_input=user_input, 
                 pdf_text=None, 
                 thread_id=thread_id
             )
             
-            # 4. 打印最终回复 (run_agent 已经打印了过程，这里打印最终结果)
+            # 打印 Agent 的最终响应
             print(f"\n🤖 Agent:\n{response}\n")
             print("-" * 50)
             
         except KeyboardInterrupt:
+            # 处理 Ctrl+C 中断
             print("\n\n👋 User Interrupted. Bye!")
             sys.exit(0)
         except Exception as e:
+            # 处理其他异常
             print(f"\n❌ Error: {e}")

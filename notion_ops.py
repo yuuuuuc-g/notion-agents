@@ -28,7 +28,7 @@ def _safe_str(val: Any) -> str:
 def parse_rich_text(text: str) -> List[Dict]:
     """
     解析 Markdown 行内样式，返回 Notion rich_text 对象数组
-    支持: **Bold**, `Code`, [Link](url), $Math$
+    支持: **Bold**, `Code`, [Link](url), $Math$, ==Highlight==
     """
     if not text: return []
     
@@ -86,7 +86,15 @@ def parse_rich_text(text: str) -> List[Dict]:
                 "annotations": {"bold": True}
             })
             
-        # 5. 普通文本
+        # 5. 高亮 ==highlight== (新增部分)
+        elif part.startswith('==') and part.endswith('=='):
+            rich_text.append({
+                "type": "text",
+                "text": {"content": part[2:-2]},
+                "annotations": {"color": "yellow_background"} # Notion 高亮样式
+            })
+            
+        # 6. 普通文本
         else:
             rich_text.append({"type": "text", "text": {"content": part}})
             
@@ -292,12 +300,35 @@ def markdown_to_blocks(markdown_text: str) -> List[Dict]:
                 "numbered_list_item": {"rich_text": parse_rich_text(content)}
             })
             
-        # Quote
+        # Quote & Callout 智能识别
         elif stripped.startswith('> '):
-            blocks.append({
-                "object": "block", "type": "quote",
-                "quote": {"rich_text": parse_rich_text(stripped[2:])}
-            })
+            content = stripped[2:].strip()
+            # 检测是否以 Emoji 开头 (简单列举常用 Emoji，或者判断首字符)
+            # 这里列举最常用的作为 Callout 触发器
+            callout_emojis = ["💡", "⚠️", "ℹ️", "✅", "❌", "📌", "🔥", "🧠"]
+            first_char = content[0] if content else ""
+            
+            # 如果以这些 Emoji 开头，渲染为 Callout (标注框)
+            if first_char in callout_emojis or (len(content) > 1 and content[1] in [" "]): 
+                # 简单 heuristic: 假设 LLM 生成 "> 💡 提示"
+                # 提取图标
+                icon = first_char
+                text_content = content[1:].strip() if len(content) > 1 else content
+                
+                blocks.append({
+                    "object": "block", "type": "callout",
+                    "callout": {
+                        "rich_text": parse_rich_text(text_content),
+                        "icon": {"emoji": icon},
+                        "color": "gray_background" # 默认灰色背景，好看
+                    }
+                })
+            else:
+                # 否则渲染为普通引用 (Quote)
+                blocks.append({
+                    "object": "block", "type": "quote",
+                    "quote": {"rich_text": parse_rich_text(content)}
+                })
             
         # Paragraph
         else:
