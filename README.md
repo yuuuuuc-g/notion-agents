@@ -1,32 +1,36 @@
+---
+
 ```markdown
-# 💠 Notion-Prism-React
+# 🧠 Exocortex (Notion-Prism-React)
 
-> **一个由 LangGraph 驱动的智能知识管理 Agent。**
-> 拒绝信息堆砌，构建一个高质量、非重复、可长期演进的个人知识库。
+> **你的个人认知外延系统 (Your Personal Cognitive Extension)。**
+> 集成 "第二大脑" 知识管理与 "AI 语音助教" 的多模态智能 Agent。
 
-**Notion-Prism-React** 是一个基于 ReAct 架构的自动化知识管理系统。它能够接收文本或 PDF 输入，通过语义检索自动判断是“新建笔记”还是“融合旧知”，并自动处理 Notion 格式排版与向量索引同步。
+**Exocortex** 是一个基于 LangGraph ReAct 架构的自动化系统。它不仅仅是一个笔记工具，更是一个能听、能写、能思考的数字助理。它既能将复杂的 PDF/文本转化为结构化的 Notion 知识库，也能利用微软 Edge TTS 技术辅助你的语言学习（西班牙语/英语）。
 
 ---
 
 ## ✨ 核心特性
 
-### 🧠 智能决策 (ReAct Agent)
-- **LangGraph 驱动**：基于 ReAct (Reason + Act) 模式，Agent 拥有独立的思考与决策能力。
-- **自主闭环**：自动执行 `搜索` → `决策` → `执行` (创建/合并) → `同步` 的完整流程。
-- **会话记忆**：支持基于 `thread_id` 的多轮对话上下文记忆。
+### 🎧 多模态音频生成 (New)
+- **AI 语音助教**：集成 `edge-tts`，支持将任意文本转化为自然流畅的语音。
+- **智能语种检测**：自动识别并支持 **西班牙语 (Default)** 和 **英语** 发音，专为语言学习者打造。
+- **即时播放与下载**：生成的音频直接嵌入聊天界面播放，并提供 MP3 下载，自动处理文件路径传输。
+
+### 🧠 双轨智能决策 (Dual-Path Logic)
+- **高效分流**：Agent 内置任务分类器：
+  - 🟢 **音频任务**：走“快车道”，**跳过向量检索**，直接调用 TTS 工具，快速响应。
+  - 🔵 **知识任务**：走“慢车道”，执行深度检索与逻辑去重。
+- **LangGraph 驱动**：基于 ReAct 模式，拥有独立的思考、工具调用与参数修正能力。
 
 ### 🔍 语义去重与融合
-- **知识完备性检查**：在写入前，Agent 始终先搜索向量库中的现有笔记。
-- **智能合并**：若发现相似主题，自动读取旧内容并与新知融合（Merge），避免知识库产生冗余碎片。
+- **知识完备性检查**：在写入知识库前，Agent 始终先搜索向量库（ChromaDB）。
+- **智能合并 (Merge)**：若发现相似笔记，自动读取旧内容并与新知融合，拒绝碎片化冗余。
 
 ### 🛠️ 强大的工程化实现
-- **Notion 深度集成**：
-  - 自动将 Markdown 转换为 Notion Blocks。
-  - **自动分片写入**：完美解决 Notion API 单次请求 `block ≤ 100` 的限制。
-- **PDF 全流程支持**：
-  - UI 直接上传 PDF，自动解析为文本并注入 Agent 上下文。
-  - 向量索引策略：始终使用完整语义文本进行索引，而非碎片化 Chunk，保证检索精度。
-- **双向同步**：每次 Notion 写入成功后，自动同步更新 Vector DB，确保“大脑”与“笔记本”一致。
+- **Notion 深度集成**：自动处理 Markdown 转 Blocks，支持 **分片写入** (完美解决 Notion API 100 block 限制)。
+- **File 全流程支持**：UI 上传 -> 解析 -> `Session State` 持久化 -> 注入上下文。
+- **Write-Through 策略**：Notion 写入成功后立即同步向量索引，确保“大脑”与“笔记本”实时一致。
 
 ---
 
@@ -35,33 +39,40 @@
 ### 📂 项目结构
 
 ```text
-notion-prism-react/
-├── app.py                # 🖥️ Streamlit UI：负责聊天交互与文件上传
-├── agent_graph.py        # 🧠 Brain：LangGraph ReAct Agent 的核心定义
-├── tools.py              # 🛠️ Tools：封装给 Agent 调用的工具（搜索库/操作Notion）
-├── notion_ops.py         # 🧱 Ops：Notion API 底层封装 (Markdown解析/分批写入)
-├── vector_ops.py         # 💾 Ops：向量数据库操作 (Search / Add)
-├── llm_core.py           # 🔌 Core：LLM 模型初始化配置
-├── requirements.txt      # 📦 依赖清单
+exocortex/
+├── app.py                # 🖥️ Streamlit UI：负责聊天、音频播放、文件状态管理
+├── agent_graph.py        # 🧠 Brain：定义 SOP、双轨决策逻辑与 Graph 初始化
+├── tools.py              # 🛠️ Tools：工具箱 (Notion管理 / 语音生成 / 向量检索)
+├── audio_ops.py          # 🔊 Ops：音频生成核心 (Edge-TTS / Pydub / 正则清洗) 
+├── notion_ops.py         # 🧱 Ops：Notion API 底层封装
+├── vector_ops.py         # 💾 Ops：向量数据库操作
+├── llm_core.py           # 🔌 Core：LLM 配置
+├── packages.txt          # 📦 环境配置：用于 Streamlit Cloud 安装 ffmpeg
+├── requirements.txt      # 📦 Python 依赖
 └── README.md
 
 ```
 
 ### 🔄 工作流 (Workflow)
 
-```
+```mermaid
 graph TD
-    User[用户输入 (文本/文件)] --> Agent
+    User[用户输入 (文本/文件)] --> Classifier{⚡ 任务分类}
     
-    subgraph "ReAct Loop"
-        Agent[🤖 Agent] --> Search{🔍 向量搜索}
-        Search -- 发现相似笔记 --> Merge[⚗️ 决策: 合并内容]
-        Search -- 无重复 --> Create[📝 决策: 新建页面]
+    subgraph "Path A: Audio (Fast Track)"
+        Classifier -- 🔊 转语音/朗读 --> TTS[调用 convert_text_to_audio]
+        TTS --> AudioFile[生成 MP3]
+        AudioFile --> Player[前端显示播放器]
     end
-    
-    Merge & Create --> Write[Notion API (Block切片)]
-    Write --> Sync[💾 同步至 Vector DB]
-    Sync --> Response[✅ 返回 Notion 链接]
+
+    subgraph "Path B: Knowledge (Deep Think)"
+        Classifier -- 📝 存笔记/整理 --> Search{🔍 向量搜索}
+        Search -- 发现相似 --> Merge[⚗️ 决策: 合并内容]
+        Search -- 无重复 --> Create[📝 决策: 新建页面]
+        Merge & Create --> Write[Notion API]
+        Write --> Sync[💾 同步至 Vector DB]
+        Sync --> Link[✅ 返回 Notion 链接]
+    end
 
 ```
 
@@ -71,20 +82,22 @@ graph TD
 
 ### 1. 安装依赖
 
-确保 Python 环境已就绪（建议 Python 3.10+）：
+需安装 Python 依赖及系统级音频处理库 `ffmpeg`。
 
 ```bash
+# 1. Python 库
 pip install -r requirements.txt
+
+# 2. FFmpeg (本地运行需安装，Streamlit Cloud 会自动读取 packages.txt)
+# macOS: brew install ffmpeg
+# Windows: winget install ffmpeg
 
 ```
 
-### 2. 配置环境变量
-
-在项目根目录创建 `.env` 文件，填入以下配置：
+### 2. 配置环境变量 (.env)
 
 ```ini
 OPENAI_API_KEY=sk-xxxx
-# Notion 集成配置
 NOTION_TOKEN=secret_xxxx
 NOTION_DATABASE_ID=xxxx
 
@@ -97,66 +110,60 @@ streamlit run app.py
 
 ```
 
-浏览器自动打开后即可开始使用。
-
 ---
 
 ## 📖 使用指南
 
-### 文本交互
+### 1.  语言学习模式 (Text-to-Speech)
 
-直接在对话框输入笔记内容或知识点，Agent 会自动判断并处理。
+直接告诉 Agent：
 
-### file 处理流程
+> "把下面这段话转成西班牙语/英语/中文语音：xxxx..."
+> "Read this text for me."
 
-1. 在文件栏上传文件。
-2. 在对话框输入指令，例如：
-> "请整理这份文档的核心观点并写入 Notion"
+**结果**：Agent 会跳过检索，直接在界面生成音频播放器。
 
+### 2.  知识管理模式 (Knowledge Base)
 
-3. **Agent 将执行：**
-* 解析 PDF 文本 -> 注入上下文 -> 检索查重 -> 写入 Notion -> 建立索引。
+输入笔记或上传文件：
 
+> "整理这份 文件 的核心观点并写入 Notion。"
+> "新建一个关于 'Transformer 架构' 的笔记。"
 
+**结果**：Agent 会先去 Notion 查重，然后决定是新建还是合并，最后返回链接。
 
-> **💡 Note:** PDF 内容在存入向量库时，会以语义完整的形式索引，而不是机械地按页切割，这有助于提高后续问答的召回率。
+### 3. 📂 文件处理
+
+在侧边栏上传 PDF/EPUB/TXT。上传后，文件内容会被锁定在 `Session State` 中，即使对话刷新也不会丢失，Agent 可随时读取。
 
 ---
 
 ## 🧠 Agent 行为规范 (SOP)
 
-为了保证知识库的整洁，Agent 被硬编码遵循以下 **标准作业程序 (SOP)**：
+Agent 遵循严格的 **标准作业程序 (SOP)**：
 
-1. **Search First**：任何写入请求前，**必须**先调用 `search_knowledge_base`。
-2. **Autonomous Decision**：
-* 🔴 **Found (命中)**：调用 `overwrite` 模式，进行知识融合。
-* 🟢 **Not Found (未命中)**：调用 `create` 模式，新建页面。
+1. **PRIME DIRECTIVE (最高指令)**：
+* 如果是音频请求 -> **绝对禁止**搜索向量库 (节约时间/Token)。
+* 如果是笔记请求 -> **必须**搜索向量库 (防止重复)。
 
 
-3. **Zero-Touch**：不需要向用户请求确认，直接执行决策。
-4. **Final Response**：操作完成后，仅返回 `✅ Operation Complete` 及对应的 Notion 链接。
+2. **Output Protocol**：
+* 音频任务必须返回 `File path: /path/to/file.mp3` 以触发前端播放器。
+* 笔记任务仅返回 Notion 链接。
+
+
 
 ---
 
 ## 🛡️ 工程鲁棒性 (Robustness)
 
-本项目已解决以下关键工程问题，适合长期稳定运行：
-
-* ✅ **Notion 写入限制**：自动处理 block 数量超过 100 时的分页追加 (Pagination Append)。
-* ✅ **数据一致性**：解决了向量库与 Notion 内容不同步的问题。
-* ✅ **PDF 通路**：修复了文件流在 Agent 上下文中丢失或解析为空的问题。
-* ✅ **工具稳定性**：严格的 Tool Argument Schema，防止 Agent 调用参数错误。
+* ✅ **Session State 保持**：修复了 Streamlit 刷新导致上传文件上下文丢失的问题。
+* ✅ **正则路径提取**：使用 Regex 从 Agent 的“废话”中精准提取 `.mp3` 路径，确保播放器稳定加载。
+* ✅ **空文件防御**：在 `audio_ops` 中增加了文件大小检测，防止生成 0kb 的损坏音频。
+* ✅ **Notion 分片**：自动处理长文写入限制。
 
 ---
 
-## 🔧 未来规划
-
-* [ ] **多知识域支持**：根据内容自动路由到不同的 Notion Database (e.g., Tech, Reading, Life)。
-* [ ] **高级分块**：引入 Chunk-level 的细粒度向量索引。
-* [ ] **多 Agent 协作**：引入 Reviewer Agent 对笔记质量进行二次审查。
-* [ ] **Web API 部署**：利用 FastAPI 封装为后端服务。
-
----
 
 ## 📜 License
 
