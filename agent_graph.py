@@ -4,7 +4,7 @@ Notion 知识管理 Agent 图定义
 本模块使用 LangGraph 构建一个自主的知识管理 Agent，负责维护高质量的 Notion 数据库。
 Agent 会自动检查重复内容，智能合并新旧信息，并支持 Markdown 格式化。
 """
-
+import uuid
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import SystemMessage
@@ -94,7 +94,6 @@ def run_agent(user_input: str, file_content: str = None, thread_id: str = None):
     """
     # 如果没有提供 thread_id，自动生成一个用于会话记忆
     if thread_id is None:
-        import uuid
         thread_id = str(uuid.uuid4())
     
     # 配置会话上下文

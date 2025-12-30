@@ -11,3 +11,4 @@ pypdf
 requests
 EbookLib
 beautifulsoup4
+watchdog
