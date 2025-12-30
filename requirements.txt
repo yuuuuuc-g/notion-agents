@@ -12,3 +12,4 @@ requests
 EbookLib
 beautifulsoup4
 watchdog
+pysqlite3-binary
