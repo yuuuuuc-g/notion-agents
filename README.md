@@ -51,7 +51,7 @@ notion-prism-react/
 
 ```
 graph TD
-    User[用户输入 (文本/PDF)] --> Agent
+    User[用户输入 (文本/文件)] --> Agent
     
     subgraph "ReAct Loop"
         Agent[🤖 Agent] --> Search{🔍 向量搜索}

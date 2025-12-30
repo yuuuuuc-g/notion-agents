@@ -7,8 +7,6 @@ from typing import Optional, Dict, Any
 load_dotenv()
 
 # --- 配置 Embedding ---
-# 确保你安装了 sentence-transformers
-# pip install sentence-transformers
 EMBEDDING_FUNC = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="BAAI/bge-m3", 
     device="cpu"   # "mps" (Mac), "cuda" (NVIDIA), 或 "cpu"
@@ -122,7 +120,7 @@ def search_memory(
         count = len(results['ids'][0])
         print(f"   -------- Top {count} Candidates --------")
         
-        THRESHOLD = 1.0  # 🔥 修改点4：BGE-M3 的距离可能比较大，建议先放宽阈值观察，或者设为 1.0 (不过滤)
+        THRESHOLD = 0.85  # 🔥 修改点4：BGE-M3 的距离可能比较大，建议先放宽阈值观察，或者设为 1.0 (不过滤)
         # Chroma 默认是 L2 距离，越小越相似。0.85 是个经验值，如果搜不到可以调大到 1.2
         
         for i in range(count):

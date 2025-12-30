@@ -9,3 +9,5 @@ notion-client
 python-dotenv
 pypdf
 requests
+EbookLib
+beautifulsoup4

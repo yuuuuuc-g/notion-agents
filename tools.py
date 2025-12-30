@@ -50,7 +50,7 @@ def manage_notion_note(
     """
     print(f"✍️ [Tool] Action: {action.upper()} | Title: {title}")
     
-    # 1. 构造数据包 (适配新版 notion_ops)
+    # 1. 构造数据包
     draft_data = {
         "title": title,
         "summary": summary,

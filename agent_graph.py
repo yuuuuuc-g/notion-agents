@@ -17,19 +17,34 @@ from tools import tools_list
 # ==========================================
 # Agent 的标准操作流程 (SOP)，定义了 Agent 的工作方式和决策逻辑
 SYSTEM_PROMPT = """
-You are an autonomous Knowledge Manager Agent. Your goal is to maintain a high-quality, non-duplicate Notion database.
+You are an autonomous Knowledge Manager Agent. Your goal is to maintain a high-quality Notion database, ensuring user intent is always respected.
+
+**PRIME DIRECTIVE:**
+The User's explicit command overrides your de-duplication logic. If the user asks to "create a new page" or "start a new topic", you MUST create a new page, even if a similar topic already exists.
 
 **YOUR STANDARD OPERATING PROCEDURE (SOP):**
 
-1. **RECEIVE INPUT**: User sends a note or content.
-2. **SEARCH FIRST (CRITICAL)**: Use `search_knowledge_base` to check if this topic exists.
-3. **DECISION**:
-    - **CASE A: Found similar note**: 
+1. **ANALYZE INTENT**: 
+    - Check if the user's input contains explicit instructions like "create a new page", "don't merge", or "separate note".
+    - If YES: Mark intent as `FORCE_CREATE`.
+    - If NO: Mark intent as `AUTO_DETECT`.
+
+2. **SEARCH KNOWLEDGE BASE**: 
+    - Always use `search_knowledge_base` to retrieve context, even if you plan to create a new page (to generate better summaries or links).
+
+3. **DECISION (CRITICAL LOGIC)**:
+    - **CASE A: User requests NEW PAGE (Intent = FORCE_CREATE)**:
+        - IGNORE similarity matches.
+        - Use `manage_notion_note(action="create", ...)` immediately.
+        
+    - **CASE B: Found similar note AND Intent = AUTO_DETECT**: 
         - Read the `existing_content` from the search result.
         - Merge the NEW content with the OLD content intelligently.
         - Use `manage_notion_note(action="overwrite", target_page_id=...)`.
-    - **CASE B: No match found**:
+        
+    - **CASE C: No match found**:
         - Use `manage_notion_note(action="create", ...)` to verify a new page.
+
 4. **RESPONSE**:
     - After the tool executes successfully, reply to the user with "✅ Operation Complete" and the Notion Link provided by the tool output.
     - DO NOT ask for confirmation. Just do it.
@@ -62,16 +77,16 @@ graph = create_react_agent(
     checkpointer=memory
 )
 
-def run_agent(user_input: str, pdf_text: str = None, thread_id: str = None):
+def run_agent(user_input: str, file_content: str = None, thread_id: str = None):
     """
     运行 Agent 的封装函数
     
     执行完整的 Agent 工作流程：接收用户输入，执行工具调用，返回最终响应。
-    支持 PDF 文本附加和会话记忆管理。
+    支持多格式文本附加和会话记忆管理。
     
     参数:
         user_input: 用户输入的文本
-        pdf_text: 从 PDF 提取的文本（可选）
+        file_content: 从文件(PDF/EPUB/TXT)提取的文本内容
         thread_id: 线程 ID（可选，用于会话记忆。如果为 None，会自动生成）
     
     返回:
@@ -85,13 +100,14 @@ def run_agent(user_input: str, pdf_text: str = None, thread_id: str = None):
     # 配置会话上下文
     config = {"configurable": {"thread_id": thread_id}}
     
-    # 构造完整的用户消息
-    # 如果有 PDF 文本，将其附加到用户输入后面
+    # 构造完整的用户消息。如果有 附加文件，将其附加到用户输入后面
     full_user_message = user_input
-    if pdf_text and pdf_text.strip():
-        full_user_message = f"{user_input}\n\n--- PDF 内容 ---\n{pdf_text}"
+    if file_content and file_content.strip():
+        # 截取过长的内容，防止 Token 爆炸 (可选，视模型能力而定)
+        safe_content = file_content[:50000] 
+        full_user_message = f"{user_input}\n\n--- 📎 附加文件内容 ---\n{safe_content}"
     
-    # 构造初始消息列表：系统提示词 + 用户消息
+    # 构造初始消息
     inputs = {
         "messages": [
             SystemMessage(content=SYSTEM_PROMPT),
