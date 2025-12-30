@@ -12,4 +12,5 @@ requests
 ebookLib
 beautifulsoup4
 watchdog
-pysqlite3-binary
+edge-tts
+pydub

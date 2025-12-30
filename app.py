@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import streamlit as st
 import uuid
 import warnings
@@ -7,9 +8,10 @@ import tempfile
 from ebooklib import epub
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
-from io import BytesIO
+from io import BytesIO       
+from audio_ops import generate_audio_file
     
-st.set_page_config(page_title="ReAct Knowledge Agent", page_icon="🌱")
+st.set_page_config(page_title="AI Knowledge Base", page_icon="🌱")
 
 # 定义 CSS 动画样式
 st.markdown("""
@@ -49,7 +51,7 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
-st.markdown('<h1 class="gradient-text">  Yuc\'s Notion Agent</h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="gradient-text">  Exocortex</h1>', unsafe_allow_html=True)
 st.markdown('<p class="caption-gradient">I search, I decide, I execute.</p>', unsafe_allow_html=True)
 
 # Session State
@@ -181,7 +183,6 @@ with st.sidebar:
         type=["pdf", "epub", "txt"],
         help="支持上传 PDF、电子书或纯文本文件供 Agent 学习"
     )
-    
     # 清空按钮，方便重置对话
     if st.button("🥀 "):
         st.session_state.messages = []
@@ -193,26 +194,48 @@ if uploaded_file is not None:
     file_content = process_uploaded_file(uploaded_file)
     
     if file_content:
+        # ✅ [关键步骤] 必须存入 Session State，否则 Agent 读不到！
+        st.session_state["file_content"] = file_content
+        
         st.sidebar.success(f"已加载: {uploaded_file.name} ({len(file_content)} 字符)")
     else:
         st.sidebar.error("无法读取文件内容")
+else:
+    # 🧹 如果用户点了原本文件上传控件的 "X" 删除文件
+    # 我们也要同步清除 Session State 里的内容，防止 Agent 还在读旧文件
+    if "file_content" in st.session_state:
+        del st.session_state["file_content"]
 
+# 1. 获取用户输入
 if prompt := st.chat_input("Enter a note or topic..."):
-    # 1. 显示用户输入
+    
+    # --- A. 显示用户消息 ---
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 2. Agent 运行
+    # --- B. AI 开始处理 ---
     with st.chat_message("assistant"):
-        print("file length:", len(file_content) if file_content else 0)
-        with st.spinner("🤖 Agent is working (Searching -> Thinking -> Acting)..."):
-            try:
-                from agent_graph import run_agent
-                response = run_agent(prompt, file_content, st.session_state.thread_id)
-                st.markdown(response)
-                st.session_state.messages.append(
-                    {"role": "assistant", "content": response}
-                )
-            except Exception as e:
-                st.error(f"Error: {e}")
+        with st.spinner("Thinking..."):
+           from agent_graph import run_agent
+
+           result = run_agent(
+            prompt,
+            file_content=st.session_state.get("file_content", None),
+            thread_id=st.session_state.thread_id
+           )
+
+        # 显示文本
+        st.markdown(result["text"])
+        st.session_state.messages.append(
+            {"role": "assistant", "content": result["text"]}
+        )
+
+        # Audio 模态
+        if result["type"] == "audio" and result["audio_path"]:
+            st.success("🎙️ Audio generated")
+            st.audio(result["audio_path"])
+
+        # Knowledge / Notion 模态
+        if result["type"] == "knowledge" and result["notion_url"]:
+            st.markdown(f"[🔗 打开 Notion 页面]({result['notion_url']})")

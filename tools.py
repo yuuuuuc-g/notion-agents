@@ -1,6 +1,7 @@
 import json
 from langchain_core.tools import tool
 from typing import Optional, List
+from audio_ops import generate_audio_file
 import vector_ops
 import notion_ops
 
@@ -116,5 +117,24 @@ def manage_notion_note(
             
     return "❌ Failed to save note to Notion."
 
+# [新增] 定义转语音工具
+@tool
+def convert_text_to_audio(text: str, language: str = "es"):
+    """
+    Converts text to audio/speech file.
+    Use this tool when the user asks to "generate audio", "read aloud", "speak this", or "text to speech".
+    
+    Args:
+        text: The text content to be converted to audio.
+        language: The target language code. Use "es" for Spanish, "en" for English. Default is "es".
+    """
+    # 调用后端生成函数
+    file_path = generate_audio_file(text, language)
+    
+    if file_path:
+        return f"✅ Audio generated successfully! File path: {file_path}"
+    else:
+        return "❌ Failed to generate audio file."
+
 # 导出工具列表
-tools_list = [search_knowledge_base, manage_notion_note]
+tools_list = [search_knowledge_base, manage_notion_note, convert_text_to_audio]
