@@ -1,9 +1,8 @@
 import asyncio
 import edge_tts
 import re
-import tempfile
 import os
-from pydub import AudioSegment
+import uuid # 引入 uuid 防止文件名冲突
 
 # --- 声音配置 ---
 VOICE_MAP = {
@@ -12,8 +11,7 @@ VOICE_MAP = {
     "zh": "zh-CN-XiaoxiaoNeural"
 }
 RATE = "-10%" 
-PAUSE_DURATION_MS = 1000 
-PAUSE_MARKER = "==="
+# PAUSE_DURATION_MS 和 PAUSE_MARKER 在没有 pydub 时暂时失效，故不再使用
 
 def clean_text_for_audio(text):
     if not text: return ""
@@ -24,66 +22,47 @@ def clean_text_for_audio(text):
 
 async def _generate_audio_async(text_content, output_path, language="es"):
     voice = VOICE_MAP.get(language, VOICE_MAP["es"])
-    segments_text = text_content.split(PAUSE_MARKER)
     
-    final_audio = AudioSegment.empty()
-    silence_audio = AudioSegment.silent(duration=PAUSE_DURATION_MS)
-    
-    # 使用临时目录，避免权限问题
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-        temp_filename = tmp.name
+    # 1. 清理文本
+    clean_content = clean_text_for_audio(text_content)
+    if not clean_content:
+        print("❌ Warning: Text is empty after cleaning.")
+        return False
 
     try:
-        # 🔍 打印日志，确认正在处理
-        print(f"🎤 Generating audio for: {text_content[:20]}...")
+        # 🔍 打印日志
+        print(f"🎤 Generating audio for: {clean_content[:20]}...")
         
-        has_content = False
-        for i, segment in enumerate(segments_text):
-            clean_segment = clean_text_for_audio(segment)
-            if not clean_segment: continue
+        # 2. 直接调用 EdgeTTS 生成 (不再分段拼接，以摆脱 pydub 依赖)
+        communicate = edge_tts.Communicate(clean_content, voice, rate=RATE)
+        await communicate.save(output_path)
             
-            communicate = edge_tts.Communicate(clean_segment, voice, rate=RATE)
-            await communicate.save(temp_filename)
-            
-            # 🛑 关键修复：检查生成的文件是不是空的
-            if os.path.getsize(temp_filename) == 0:
-                print("⚠️ Warning: Generated segment is empty, skipping.")
-                continue
-                
-            segment_audio = AudioSegment.from_mp3(temp_filename)
-            final_audio += segment_audio
-            if i < len(segments_text) - 1:
-                final_audio += silence_audio
-            
-            has_content = True
-            
-        if has_content:
-            final_audio.export(output_path, format="mp3")
+        # 3. 检查生成结果
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             print(f"✅ Audio saved to {output_path} (Size: {os.path.getsize(output_path)} bytes)")
             return True
         else:
-            print("❌ No valid audio content generated.")
+            print("❌ File created but is empty.")
             return False
 
     except Exception as e:
         print(f"❌ Audio generation error: {e}")
         return False
-    finally:
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
 
 def generate_audio_file(text, language="es"):
     output_dir = "generated_audio"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
-    filename = f"audio_{os.getpid()}_{hash(text[:20])}.mp3"
+    # 使用 uuid 替代 hash，防止负数和冲突
+    filename = f"audio_{uuid.uuid4().hex[:8]}.mp3"
     output_path = os.path.join(output_dir, filename)
     abs_path = os.path.abspath(output_path)
     
     try:
         # 运行异步任务
         asyncio.run(_generate_audio_async(text, abs_path, language))
+        
         # 二次确认文件真的存在且不为空
         if os.path.exists(abs_path) and os.path.getsize(abs_path) > 0:
             return abs_path
