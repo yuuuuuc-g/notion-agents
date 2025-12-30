@@ -1,3 +1,6 @@
+import sys
+import os
+
 # Compatibility fix for some environments
 try:
     __import__('pysqlite3')
@@ -8,8 +11,6 @@ except ImportError:
 import streamlit as st
 import uuid
 import warnings
-import sys
-import os
 import tempfile
 from ebooklib import epub
 from bs4 import BeautifulSoup
