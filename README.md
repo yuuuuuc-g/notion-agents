@@ -1,5 +1,3 @@
----
-
 ```markdown
 # 🧠 Exocortex (Notion-Prism-React)
 
@@ -164,6 +162,21 @@ Agent 遵循严格的 **标准作业程序 (SOP)**：
 
 ---
 
+## 🔧 未来规划 (Roadmap)
+
+我们计划从当前的单体 Agent 逐步演进为基于 MCP 的分布式多智能体系统。
+
+* [ ] **多知识域支持 (Multi-Tenancy)**：根据内容语义自动路由到不同的 Notion Database (e.g., Tech / Reading / Life)，实现领域隔离。
+* [ ] **高级分块 (Advanced Chunking)**：引入 Chunk-level 的细粒度向量索引（Parent-Child Indexing），解决长文档检索精度问题。
+* [ ] **多 Agent 协作 (Multi-Agent Collaboration)**：
+    * 引入 **Reviewer Agent** 对生成的笔记质量进行二次审查和优化。
+    * 引入 **Researcher Agent** 专门负责网络搜索与资料汇总。
+* [ ] **MCP 架构升级 (Model Context Protocol)**：
+    * 将 `Notion`, `EdgeTTS`, `VectorDB` 等工具解耦为独立的 **MCP Servers**。
+    * 利用 MCP 实现标准化的多智能体连接与工具共享，提升系统的扩展性与生态兼容性。
+* [ ] **Web API 部署**：剥离 Streamlit 前端，利用 FastAPI 封装 Agent 核心逻辑，提供 RESTful API 以支持更多客户端接入。
+
+---
 
 ## 📜 License
 
