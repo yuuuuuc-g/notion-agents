@@ -1,3 +1,6 @@
+import sys
+import os
+
 # Compatibility fix for some environments
 try:
     __import__('pysqlite3')
@@ -5,8 +8,6 @@ try:
 except ImportError:
     pass
 
-import sys
-import os
 import streamlit as st
 import uuid
 import warnings
