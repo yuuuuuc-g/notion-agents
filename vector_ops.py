@@ -1,17 +1,40 @@
 import os
 import chromadb
-from chromadb.utils import embedding_functions
 from dotenv import load_dotenv
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
+from langchain_openai import OpenAIEmbeddings 
 
 load_dotenv()
 
-# --- 配置 Embedding ---
-EMBEDDING_FUNC = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="BAAI/bge-m3", 
-    device="cpu"   # "mps" (Mac), "cuda" (NVIDIA), 或 "cpu"
-)
+# --- 🔥 核心修改：自定义适配器类 ---
+# 这是一个“胶水”类，负责把 ChromaDB 的请求转发给 OpenRouter
+class OpenRouterEmbeddingFunction:
+    def __init__(self):
+        # 初始化 LangChain 的 Embedding 工具
+        api_key = os.environ.get("OPENAI_API_KEY")
+        api_base = os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+        
+        if not api_key:
+            # 防止没有 key 时报错，给一个假 key 占位（运行时会抛错，但启动不崩）
+            print("⚠️ Warning: OPENAI_API_KEY not found in environment.")
+            api_key = "sk-placeholder"
 
+        self.embeddings = OpenAIEmbeddings(
+            model="text-embedding-3-small", # OpenRouter 支持的高性价比模型
+            openai_api_key=api_key,
+            openai_api_base=api_base,
+            check_embedding_ctx_length=False
+        )
+
+    # ChromaDB 要求的标准接口：接收文本列表，返回向量列表
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        # 调用 API 生成向量
+        return self.embeddings.embed_documents(input)
+
+# --- 配置 Embedding ---
+EMBEDDING_FUNC = OpenRouterEmbeddingFunction()
+
+# 初始化客户端
 client = chromadb.PersistentClient(path="./chroma_db")
 collection = client.get_or_create_collection(
     name="knowledge_base",
@@ -20,10 +43,10 @@ collection = client.get_or_create_collection(
 
 def add_memory(
     page_id: str,
-    text: str, # <--- 🔥 修改点1：改名为 text，对应 tools.py
+    text: str, 
     *,
     title: str = None,
-    domain: str = None, # <--- 🔥 修改点2：改名为 domain，对应 tools.py
+    domain: str = None, 
     metadata: Optional[Dict[str, Any]] = None,
 ):
     """
@@ -43,24 +66,22 @@ def add_memory(
         print("❌ VectorOps: content too short or missing, skip memory.")
         return False
 
-    # 3. 准备 Metadata (存入 ChromaDB 供后续检索参考)
+    # 3. 准备 Metadata 
     final_metadata.setdefault("title", final_title)
-    final_metadata.setdefault("domain", final_domain) # 统一存为 domain
-    # 兼容性处理：如果旧代码用了 category，也存一份
+    final_metadata.setdefault("domain", final_domain) 
     final_metadata.setdefault("category", final_domain) 
     
-    # 截取正文存入 metadata，供 RAG 上下文使用 (限制长度防止元数据过大)
+    # 截取正文存入 metadata
     final_metadata["content"] = text[:3000] 
     final_metadata.setdefault("url", "")
 
-    # 清洗 None (ChromaDB 不允许 metadata 值为 None)
+    # 清洗 None 
     cleaned_metadata = {k: str(v) for k, v in final_metadata.items() if v is not None}
 
     print(f"💾 Vectorizing memory: {final_title}...")
 
-    # 4. 构建高密度 Embedding 文本 (策略：标题加权 + 摘要 + 正文)
+    # 4. 构建 Embedding 文本
     summary_text = final_metadata.get("summary", "")
-    # 移除换行符，减少噪声
     dense_content = text[:3000].replace("\n", " ")
     
     embedding_text = (
@@ -86,7 +107,7 @@ def add_memory(
 def search_memory(
     query_text: str,
     n_results: int = 5,
-    domain: str = None # <--- 🔥 修改点3：统一使用 domain 参数
+    domain: str = None 
 ) -> Dict[str, Any]:
     """
     从向量数据库中检索相关记忆
@@ -102,11 +123,7 @@ def search_memory(
         "n_results": n_results 
     }
     
-    # 分类过滤
-    # 注意：ChromaDB 的 where 过滤字段必须在 metadata 里存在
     if domain and domain not in ["All", None]:
-        # 这里为了兼容，你可以同时检查 domain 或 category
-        # 但通常我们在 add_memory 里已经统一存了 'domain'
         query_args["where"] = {"domain": domain}
 
     try:
@@ -120,8 +137,8 @@ def search_memory(
         count = len(results['ids'][0])
         print(f"   -------- Top {count} Candidates --------")
         
-        THRESHOLD = 0.85  # 🔥 修改点4：BGE-M3 的距离可能比较大，建议先放宽阈值观察，或者设为 1.0 (不过滤)
-        # Chroma 默认是 L2 距离，越小越相似。0.85 是个经验值，如果搜不到可以调大到 1.2
+        # 🔥 修改点4：OpenAI Embedding 的余弦距离通常较小
+        THRESHOLD = 0.7  
         
         for i in range(count):
             dist = results['distances'][0][i]

@@ -2,9 +2,12 @@ import sys
 import os
 import re
 
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+if sys.platform.startswith('linux'):
+    try:
+        __import__('pysqlite3')
+        sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+    except ImportError:
+        pass
 
 import streamlit as st
 import uuid

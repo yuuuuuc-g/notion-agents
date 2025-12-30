@@ -4,7 +4,6 @@ langchain-openai
 langgraph
 streamlit
 chromadb
-sentence-transformers
 notion-client
 python-dotenv
 pypdf
@@ -13,5 +12,4 @@ ebookLib
 beautifulsoup4
 watchdog
 edge-tts
-pydub
-pysqlite3-binary
+pysqlite3-binary ; sys_platform == 'linux'
