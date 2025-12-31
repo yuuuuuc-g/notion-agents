@@ -6,13 +6,17 @@ load_dotenv()
 
 def get_llm():
     """
-    返回配置好的 LLM 实例
-    建议使用 DeepSeek-V3 (deepseek-chat) 或 GPT-4o 以获得最佳的 Tool Calling 体验
+    OpenRouter 配置
     """
     return ChatOpenAI(
-        model="deepseek-chat", # 或 gpt-4o
+        # 🚨 关键修改：OpenRouter 的模型 ID 必须带厂商前缀
+        model="deepseek/deepseek-chat", 
+        
+        # 备选：如果 DeepSeek 比较慢，也可以换成便宜且极快的
+        # model="google/gemini-2.0-flash-exp:free", 
+        
         api_key=os.environ.get("OPENAI_API_KEY"),
-        base_url=os.environ.get("OPENAI_BASE_URL"), # 如果是 DeepSeek 需要配置这个
-        temperature=0.1, # 低温度保证工具调用准确
+        base_url=os.environ.get("OPENAI_BASE_URL"),
+        temperature=0.1,
         streaming=True
     )
