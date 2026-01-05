@@ -1,26 +1,16 @@
+# 🔒 密钥 (绝对不能传)
 .env
 .env.*
-venv/
-.venv/
-env/
-ENV/
-chroma_db/
-chroma_db_data/
-*.log
+
+# 🐍 Python 垃圾文件
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.ipynb_checkpoints
+.venv/
+venv/
+env/
+
+# 🍏 Mac 系统垃圾
 .DS_Store
-.vscode/
-.cursorignore
-.cursorindexingignore
-.idea/
-build/
-dist/
-*.egg-info/
-generated_audio
+
+# 📦 依赖记录 (有了 requirements.txt 就不需要这个)
+pip-wheel-metadata/

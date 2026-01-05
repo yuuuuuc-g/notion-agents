@@ -1,8 +1,17 @@
-langchain
+# 核心框架
+langgraph>=1.0.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
 langchain-core
-langchain-openai
-langgraph
+langchain-community
+
+# Web 服务
+fastapi
+uvicorn
+python-multipart
 streamlit
+
+# 业务工具
 chromadb
 notion-client
 python-dotenv
@@ -12,5 +21,4 @@ ebookLib
 beautifulsoup4
 watchdog
 edge-tts
-pysqlite3-binary ; sys_platform == 'linux'
 pydub

@@ -1,77 +1,86 @@
-# 🧠 Exocortex (Notion-Prism-React)
+# 🌱 Exocortex (Notion-Prism-React)
 
 > **你的个人认知外延系统 (Your Personal Cognitive Extension)。**
-> 集成 "第二大脑" 知识管理与 "AI 语音助教" 的多模态智能 Agent。
+> 基于 **Client-Server 架构** 的多模态智能 Agent，集成 "大脑外延" 知识管理与 "AI 语音助教"。
 
-**Exocortex** 是一个基于 LangGraph ReAct 架构的自动化系统。它不仅仅是一个笔记工具，更是一个能听、能写、能思考的数字助理。它既能将复杂的 PDF/文本转化为结构化的 Notion 知识库，也能利用微软 Edge TTS 技术辅助你的语言学习（西班牙语/英语）。
+**Exocortex** 是一个经过深度工程化重构的自动化系统。它采用了现代化的 **前后端分离** 与 **领域驱动设计 (DDD)**：后端 (**FastAPI**) 作为“大脑”负责逻辑思考与工具调用，前端 (**Streamlit**) 作为“皮肤”负责交互与展示。
+
+它采用 **混合云 AI 架构 (Hybrid Cloud AI Stack)**，通过 **OpenRouter** 连接顶级大模型进行思考，通过 **SiliconFlow (硅基流动)** 进行高性能向量化，告别了沉重的本地模型依赖，实现了**云原生、低延迟、高稳定性**的运行体验。
 
 ---
 
 ## ✨ 核心特性
 
-### 🎧 多模态音频生成 (New)
-- **AI 语音助教**：集成 `edge-tts`，支持将任意文本转化为自然流畅的语音。
-- **智能语种检测**：自动识别并支持 **西班牙语 (Default)** 和 **英语** 发音，专为语言学习者打造。
-- **即时播放与下载**：生成的音频直接嵌入聊天界面播放，并提供 MP3 下载，自动处理文件路径传输。
+### 🏗️ 工业级分层架构 (Decoupled & Modular)
 
-### 🧠 双轨智能决策 (Dual-Path Logic)
-- **高效分流**：Agent 内置任务分类器：
-  - 🟢 **音频任务**：走“快车道”，**跳过向量检索**，直接调用 TTS 工具，快速响应。
-  - 🔵 **知识任务**：走“慢车道”，执行深度检索与逻辑去重。
-- **LangGraph 驱动**：基于 ReAct 模式，拥有独立的思考、工具调用与参数修正能力。
+* **Client-Server 分离**：
+* **🧠 Server (FastAPI)**：独立运行的后端服务。负责 LangGraph 状态流转、Notion 写入、音频生成及向量检索。即便前端关闭，大脑依然在线。
+* **💻 Client (Streamlit)**：极简的“瘦客户端”。只负责发送 HTTP 请求和播放媒体，彻底解决了 Streamlit 刷新导致上下文丢失与内存泄漏的问题。
 
-### 🔍 语义去重与融合
-- **知识完备性检查**：在写入知识库前，Agent 始终先搜索向量库（ChromaDB）。
-- **智能合并 (Merge)**：若发现相似笔记，自动读取旧内容并与新知融合，拒绝碎片化冗余。
 
-### 🛠️ 强大的工程化实现
-- **Notion 深度集成**：自动处理 Markdown 转 Blocks，支持 **分片写入** (完美解决 Notion API 100 block 限制)。
-- **File 全流程支持**：UI 上传 -> 解析 -> `Session State` 持久化 -> 注入上下文。
-- **Write-Through 策略**：Notion 写入成功后立即同步向量索引，确保“大脑”与“笔记本”实时一致。
+* **模块化领域设计**：告别扁平脚本，采用 `config`, `agent`, `vector` 等独立模块，职责边界清晰，维护成本极低。
+
+### ☁️ 云原生与极致轻量
+
+* **零本地模型负担**：移除 `torch`、`transformers` 等 GB 级依赖，安装包体积缩减 90%，Streamlit 内存占用极低。
+* **🧠 双脑协同**：
+* **思考 (Chat)**：集成 **OpenRouter (DeepSeek/GPT-4o)**，低成本获取顶级推理能力。
+* **记忆 (Embedding)**：集成 **SiliconFlow (BAAI/bge-m3)**，利用国内直连的高性能 Embedding 服务，彻底解决向量检索的稳定性与维度兼容问题。
+
+
+
+### 🤖 双轨智能决策 (ReAct & Graph)
+
+* **Graph 编排器**：基于 **LangGraph** 状态机，Agent 拥有清晰的思考路径（State Management），支持循环推理、错误修正和多步工具调用。
+* **Agent 路由**：后端根据意图自动分流：
+* 🟢 **音频快车道**：跳过 RAG，直接调用 TTS 工具，极速响应。
+* 🔵 **知识慢车道**：执行深度检索、去重、Notion 写入与 ChromaDB 同步。
+
+
+
+### 🎧 智能语音助教
+
+* **Edge-TTS 集成**：支持西班牙语、英语、中文的高质量语音合成。
+* **静态资源服务**：后端内置静态文件服务器，通过 URL 稳定分发音频，完美解决多轮对话中的文件访问冲突。
 
 ---
 
 ## 🏗️ 系统架构
 
-### 📂 项目结构
+### 📂 项目结构 (Directory Structure)
 
 ```text
 exocortex/
-├── app.py                # 🖥️ Streamlit UI：负责聊天、音频播放、文件状态管理
-├── agent_graph.py        # 🧠 Brain：定义 SOP、双轨决策逻辑与 Graph 初始化
-├── tools.py              # 🛠️ Tools：工具箱 (Notion管理 / 语音生成 / 向量检索)
-├── audio_ops.py          # 🔊 Ops：音频生成核心 (Edge-TTS / Pydub / 正则清洗) 
-├── notion_ops.py         # 🧱 Ops：Notion API 底层封装
-├── vector_ops.py         # 💾 Ops：向量数据库操作
-├── llm_core.py           # 🔌 Core：LLM 配置
-├── packages.txt          # 📦 环境配置：用于 Streamlit Cloud 安装 ffmpeg
-├── requirements.txt      # 📦 Python 依赖
-└── README.md
+├── config/               # ⚙️ Config: 财务部 (统一管理 Env 与全局常量)
+│   └── settings.py       
+├── agent/                # 🧠 Agent: 大脑皮层
+│   ├── agent_graph.py    #    - 思考路径 (LangGraph)
+│   └── prompts.py        #    - 提示词管理 (SOP & Identity)
+├── audio/                # 🔊 Domain: 音频服务
+│   └── audio_ops.py      #    - TTS 生成与切片逻辑
+├── notion/               # 📝 Domain: 知识库服务
+│   ├── block_builder.py  #    - 排版工 (Markdown -> Blocks)
+│   └── notion_ops.py     #    - 快递员 (Notion API CRUD)
+├── vector/               # 💾 Domain: 向量记忆
+│   ├── embedding_provider.py # - 适配器 (SiliconFlow fix)
+│   └── vector_store.py   #    - 仓库管理 (ChromaDB Ops)
+├── llm/                  # 🤖 Provider: 模型工厂
+│   └── llm_provider.py   
+├── tools/                # 🛠️ Tools: 外部工具定义 (LangChain)
+├── server.py             # 🚪 Entry: 后端入口 (FastAPI)
+├── app.py                # 💻 Entry: 前端入口 (Streamlit)
+├── start.sh              # 🚀 Script: 一键启动
+├── requirements.txt      # 📦 Deps: 依赖清单
+└── .env                  # 🔐 Secrets: 密钥文件
 
 ```
 
-### 🔄 工作流 (Workflow)
+### 🔄 架构演进 (Evolution)
 
-```
-graph TD
-    User[用户输入 (文本/文件)] --> Classifier{⚡ 任务分类}
-    
-    subgraph "Path A: Audio (Fast Track)"
-        Classifier -- 🔊 转语音/朗读 --> TTS[调用 convert_text_to_audio]
-        TTS --> AudioFile[生成 MP3]
-        AudioFile --> Player[前端显示播放器]
-    end
-
-    subgraph "Path B: Knowledge (Deep Think)"
-        Classifier -- 📝 存笔记/整理 --> Search{🔍 向量搜索}
-        Search -- 发现相似 --> Merge[⚗️ 决策: 合并内容]
-        Search -- 无重复 --> Create[📝 决策: 新建页面]
-        Merge & Create --> Write[Notion API]
-        Write --> Sync[💾 同步至 Vector DB]
-        Sync --> Link[✅ 返回 Notion 链接]
-    end
-
-```
+* **Phase 1 (Script)**: 原始阶段。单一 Python 脚本，采用硬编码的线性逻辑，功能单一。
+* **Phase 2 (Graph Workflow)**: **逻辑升级**。引入 **LangGraph** 编排器，将程序重构为基于 **节点 (Nodes)** 和 **边 (Edges)** 的工作流模式。
+* **Phase 3 (Client-Server)**: **服务化**。彻底分离 FastAPI 后端与 Streamlit 前端，解决状态丢失问题。
+* **Phase 4 (Modular Refactor)**: **工程化**。引入 **DDD (领域驱动设计)** 思想，将扁平代码重构为高内聚、低耦合的模块化架构，实现了配置中心化与逻辑分层。
 
 ---
 
@@ -79,31 +88,44 @@ graph TD
 
 ### 1. 安装依赖
 
-需安装 Python 依赖及系统级音频处理库 `ffmpeg`。
-
 ```bash
-# 1. Python 库
+# 安装轻量级依赖 (FastAPI, Streamlit, LangChain, ChromaDB 等)
 pip install -r requirements.txt
 
-# 2. FFmpeg (本地运行需安装，Streamlit Cloud 会自动读取 packages.txt)
+# 安装 FFmpeg (音频处理必需)
 # macOS: brew install ffmpeg
-# Windows: winget install ffmpeg
 
 ```
 
 ### 2. 配置环境变量 (.env)
 
+请复制 `.env.example` 为 `.env` 并填入以下关键配置：
+
 ```ini
-OPENAI_API_KEY=sk-xxxx
+# 1. 思考大脑 (OpenRouter / DeepSeek)
+OPENAI_API_KEY=sk-or-v1-xxxxxxxx
+OPENAI_BASE_URL=https://openrouter.ai/api/v1
+
+# 2. 记忆向量 (SiliconFlow - BGE-M3)
+SILICON_KEY=sk-xxxxxxxx  # 必填：用于向量化服务
+SILICON_BASE_URL=https://api.siliconflow.cn/v1
+
+# 3. Notion 知识库
 NOTION_TOKEN=secret_xxxx
 NOTION_DATABASE_ID=xxxx
 
 ```
 
-### 3. 启动应用
+### 3. 一键启动 🚀
+
+无需分别运行两个终端，直接使用启动脚本：
 
 ```bash
-streamlit run app.py
+# 赋予执行权限 (仅第一次)
+chmod +x start.sh
+
+# 启动 (自动后台运行 Server 并打开 Client)
+./start.sh
 
 ```
 
@@ -111,73 +133,43 @@ streamlit run app.py
 
 ## 📖 使用指南
 
-### 1.  语言学习模式 (Text-to-Speech)
+### 1. 语言学习 (Text-to-Speech)
 
-直接告诉 Agent：
+> **User**: "把这句话转成西班牙语：La vida es sueño."
+> **Flow**: Client -> API -> Graph (Router) -> TTS Tool -> 生成 MP3 -> 返回 URL -> Client 播放。
 
-> "把下面这段话转成西班牙语/英语/中文语音：xxxx..."
-> "Read this text for me."
+### 2. 知识库构建 (RAG)
 
-**结果**：Agent 会跳过检索，直接在界面生成音频播放器。
+> **User**: "把这篇关于 Transformer 的笔记存入 Notion。"
+> **Flow**: Client -> API -> Graph (Planner) -> Vector Ops -> Notion API -> 返回链接。
 
-### 2.  知识管理模式 (Knowledge Base)
+### 3. 历史回溯 (Memory Retrieval)
 
-输入笔记或上传文件：
-
-> "整理这份 文件 的核心观点并写入 Notion。"
-> "新建一个关于 'Transformer 架构' 的笔记。"
-
-**结果**：Agent 会先去 Notion 查重，然后决定是新建还是合并，最后返回链接。
-
-### 3. 📂 文件处理
-
-在侧边栏上传 PDF/EPUB/TXT。上传后，文件内容会被锁定在 `Session State` 中，即使对话刷新也不会丢失，Agent 可随时读取。
-
----
-
-## 🧠 Agent 行为规范 (SOP)
-
-Agent 遵循严格的 **标准作业程序 (SOP)**：
-
-1. **PRIME DIRECTIVE (最高指令)**：
-* 如果是音频请求 -> **绝对禁止**搜索向量库 (节约时间/Token)。
-* 如果是笔记请求 -> **必须**搜索向量库 (防止重复)。
-
-
-2. **Output Protocol**：
-* 音频任务必须返回 `File path: /path/to/file.mp3` 以触发前端播放器。
-* 笔记任务仅返回 Notion 链接。
-
-
+> **User**: "查询数据库：上周五我记录了什么关于 Exocortex 的内容？"
+> **Flow**: Client -> API -> Embedding (SiliconFlow) -> ChromaDB Search -> LLM Answer。
 
 ---
 
 ## 🛡️ 工程鲁棒性 (Robustness)
 
-* ✅ **Session State 保持**：修复了 Streamlit 刷新导致上传文件上下文丢失的问题。
-* ✅ **正则路径提取**：使用 Regex 从 Agent 的“废话”中精准提取 `.mp3` 路径，确保播放器稳定加载。
-* ✅ **空文件防御**：在 `audio_ops` 中增加了文件大小检测，防止生成 0kb 的损坏音频。
-* ✅ **Notion 分片**：自动处理长文写入限制。
+* ✅ **配置中心化**：通过 `config/settings.py` 统一管理环境变量与全局常量，杜绝了分散读取导致的配置不一致风险。
+* ✅ **维度熔断保护**：在 `vector/embedding_provider.py` 中实现了自动维度检查，防止 API 返回一维数组导致 ChromaDB 崩溃。
+* ✅ **状态隔离**：前端刷新网页不再影响后端正在执行的长任务。
+* ✅ **静态资源服务**：FastAPI 内置 Static Files 挂载，确保生成的音频文件可以通过 URL 稳定访问。
 
 ---
 
 ## 🔧 未来规划 (Roadmap)
 
-我们计划从当前的单体 Agent 逐步演进为基于 MCP 的分布式多智能体系统。
-
-* [ ] **多知识域支持 (Multi-Tenancy)**：根据内容语义自动路由到不同的 Notion Database (e.g., Tech / Reading / Life)，实现领域隔离。
-* [ ] **高级分块 (Advanced Chunking)**：引入 Chunk-level 的细粒度向量索引（Parent-Child Indexing），解决长文档检索精度问题。
-* [ ] **多 Agent 协作 (Multi-Agent Collaboration)**：
-    * 引入 **Reviewer Agent** 对生成的笔记质量进行二次审查和优化。
-    * 引入 **Researcher Agent** 专门负责网络搜索与资料汇总。
-* [ ] **MCP 架构升级 (Model Context Protocol)**：
-    * 将 `Notion`, `EdgeTTS`, `VectorDB` 等工具解耦为独立的 **MCP Servers**。
-    * 利用 MCP 实现标准化的多智能体连接与工具共享，提升系统的扩展性与生态兼容性。
-* [ ] **Web API 部署**：剥离 Streamlit 前端，利用 FastAPI 封装 Agent 核心逻辑，提供 RESTful API 以支持更多客户端接入。
+* [x] **架构解耦**：完成 FastAPI 与 Streamlit 的分离。✅
+* [x] **代码模块化**：完成核心逻辑的 DDD 重构。✅
+* [x] **向量服务迁移**：从不稳定的 OpenRouter 迁移至高性能 SiliconFlow。✅
+* [ ] **高级检索增强 (Advanced RAG)**：实现 **Level-Chunk (父子索引)** 策略。
+* [ ] **MCP 深度集成**：完善 `mcp_server.py`，支持更多 Notion 操作，让 Exocortex 成为 IDE 的得力助手。
+* [ ] **Docker 化**：提供 `Dockerfile` 和 `docker-compose.yml`，实现一键容器化部署。
 
 ---
 
 ## 📜 License
 
 MIT License.
-Designed for personal knowledge management and learning purposes.

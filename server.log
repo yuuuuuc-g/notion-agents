@@ -1,0 +1,58 @@
+INFO:     Will watch for changes in these directories: ['/Users/eve/湛叔AI课/notion-prism-react']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [57311] using WatchFiles
+🚀 Initializing SiliconFlow BGE-M3 Embedding...
+INFO:     Started server process [57338]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+🚀 Initializing SiliconFlow BGE-M3 Embedding...
+📨 Query: 把文本转成语音：Contemporary China presents a paradoxical picture: while macroeconomic data occasionally shows resilience, the micro-level experience is fraught with anxiety. From the youth unemployment crisis to the local government debt quagmire, from the strategic setbacks of the Belt and Road Initiative to the new economic normal of a "controlled depression," a web of structural challenges point toward a common epicenter. | Thread: d1de098a-4baf-4cee-8258-5513a4cfbb09
+🎤 Processing text (413 chars)...
+✅ Audio saved: generated_audio/audio_377c8b24.mp3
+INFO:     127.0.0.1:51925 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51995 - "GET /audio/audio_377c8b24.mp3 HTTP/1.1" 206 Partial Content
+WARNING:  Invalid HTTP request received.
+INFO:     127.0.0.1:52015 - "GET /audio/audio_377c8b24.mp3 HTTP/1.1" 304 Not Modified
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+📨 Query: 记录：2026年升级程序，完成整体架构层的更新，测试成功。 | Thread: d1de098a-4baf-4cee-8258-5513a4cfbb09
+INFO:     127.0.0.1:52196 - "GET /audio/audio_377c8b24.mp3 HTTP/1.1" 304 Not Modified
+WARNING:  Invalid HTTP request received.
+✍️ [Tool] Action: CREATE | Title: 2026年升级程序
+✍️ [Notion Ops] Creating Note: 2026年升级程序
+✅ Page Created: 2df35e6b-0ea5-814b-bfc8-de6a1979b3a8
+💾 [Tool] Syncing to Vector DB: 2df35e6b-0ea5-814b-bfc8-de6a1979b3a8...
+💾 Vectorizing memory: 2026年升级程序...
+✅ Memory stored in Vector DB (SiliconFlow).
+INFO:     127.0.0.1:52198 - "POST /chat HTTP/1.1" 200 OK
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [57338]
+INFO:     Stopping reloader process [57311]

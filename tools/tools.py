@@ -1,9 +1,15 @@
+"""
+tools/tools.py
+LangChain 工具定义，负责调用 audio, vector, notion 等具体实现
+"""
 import json
 from langchain_core.tools import tool
-from typing import Optional, List
-from audio_ops import generate_audio_file
-import vector_ops
-import notion_ops
+from typing import Optional
+
+# 👇 引用各个业务模块 (使用绝对路径引用)
+from audio.audio_ops import generate_audio_file
+from notion import notion_ops
+from vector import vector_store as vector_ops
 
 @tool
 def search_knowledge_base(query: str) -> str:
@@ -117,24 +123,21 @@ def manage_notion_note(
             
     return "❌ Failed to save note to Notion."
 
-# [新增] 定义转语音工具
+# 定义转语音工具
 @tool
-def convert_text_to_audio(text: str, language: str = "es"):
+async def convert_text_to_audio(text: str, language: str = 'es'):
     """
-    Converts text to audio/speech file.
-    Use this tool when the user asks to "generate audio", "read aloud", "speak this", or "text to speech".
-    
-    Args:
-        text: The text content to be converted to audio.
-        language: The target language code. Use "es" for Spanish, "en" for English. Default is "es".
+    Converts text to audio file. 
+    Use this tool IMMEDIATELY when user asks for "speak", "read", "audio", or "listen".
+    Returns the file path of the generated MP3.
     """
-    # 调用后端生成函数
-    file_path = generate_audio_file(text, language)
+    # ✅ 关键点2：必须加 await
+    result = await generate_audio_file(text, language)
     
-    if file_path:
-        return f"✅ Audio generated successfully! File path: {file_path}"
+    if result:
+        return f"✅ Audio generated successfully. Path: {result}"
     else:
-        return "❌ Failed to generate audio file."
+        return "❌ Audio generation failed."
 
 # 导出工具列表
 tools_list = [search_knowledge_base, manage_notion_note, convert_text_to_audio]
