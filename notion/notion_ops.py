@@ -17,7 +17,6 @@ DB_SPANISH_ID = SETTINGS.DB_SPANISH_ID
 DB_HUMANITIES_ID = SETTINGS.DB_HUMANITIES_ID
 DB_TECH_ID = SETTINGS.DB_TECH_ID
 
-# ... (辅助函数 _append_children_in_batches 保持不变) ...
 
 def _append_children_in_batches(page_id: str, children: List[Dict]):
     if not children: return
@@ -31,7 +30,6 @@ def _append_children_in_batches(page_id: str, children: List[Dict]):
         except Exception as e:
             print(f"   - ❌ Batch {idx + 1} failed: {e}")
 
-# ... (API 逻辑，create, append, overwrite 等保持不变) ...
 # 注意：现在的 create_general_note 等函数里，调用 markdown_to_blocks 时
 # 实际上是调用从 .block_builder 导入的那个函数。
 
@@ -80,14 +78,9 @@ def create_general_note(data: Dict, target_db_id: str, original_url: str = None)
         print(f"❌ Create Failed: {e}")
         return None
 
-# ... (overwrite_page_content, append_to_page, get_page_text 逻辑同理，只需确保它们都用了导入的 builder 函数) ...
-# 为了确保不出错，你可以直接保留原有逻辑，只要确保 imports 改对了就行。
-# 下面只贴出必要的 append 和 overwrite 签名，内容不变：
 
 def append_to_page(page_id: str, data: Dict, restore_mode: bool = False) -> bool:
-    # 这里的逻辑和原来一样
-    # ... (省略具体实现，保持原样) ...
-    # 关键是一定要用 markdown_to_blocks(data["markdown_body"])
+
     print(f"➕ [Notion Ops] Appending to {page_id}")
     children = []
     summary = data.get("summary")

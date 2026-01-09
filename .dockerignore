@@ -1,0 +1,16 @@
+# 忽略 Git 历史
+.git
+.gitignore
+
+# 忽略本地虚拟环境
+venv/
+__pycache__/
+*.pyc
+
+# 忽略临时文件
+*.log
+.DS_Store
+
+# 忽略 Docker 配置自身
+Dockerfile
+docker-compose.yml

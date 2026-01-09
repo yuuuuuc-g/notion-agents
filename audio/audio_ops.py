@@ -45,7 +45,7 @@ async def _generate_segment_file(text: str, voice: str, filename: str) -> bool:
 
 def _smart_split_long_text(text: str, limit: int = MAX_CHUNK_SIZE) -> list[str]:
     """
-    如果一段话太长（超过 limit），再次进行强制切分，防止 503 错误
+    如果一段话太长（超过 limit），再次进行强制切分
     """
     if len(text) < limit:
         return [text]
@@ -90,7 +90,7 @@ async def generate_audio_file(text: str, language: str = 'es') -> str | None:
             clean_section = clean_text(section_raw)
             if not clean_section: continue
 
-            # B. 第二层切分：检查是否超长 (防 503)
+            # B. 第二层切分：检查是否超长
             # 如果这一段还是很长，必须切碎处理
             sub_chunks = _smart_split_long_text(clean_section)
             

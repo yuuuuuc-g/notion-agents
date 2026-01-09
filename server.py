@@ -10,16 +10,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional
 
-# 👇 [关键修改 1] 引用路径变了，去 agent 包里找
+
 from agent.agent_graph import graph
-# 如果你需要 SYSTEM_PROMPT 做调试，可以从这里导入，否则其实 Server 端只需要 graph
-from agent.prompts import SYSTEM_PROMPT 
+from langchain_core.messages import HumanMessage
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
-# 👇 [关键修改 2] 引入财务部配置
 from config.settings import SETTINGS
 
 # --- 初始化 APP ---
@@ -39,7 +35,7 @@ app.add_middleware(
 )
 
 # --- 2. 挂载静态文件目录 ---
-# 👇 [关键修改 3] 使用全局统一配置，防止路径不一致
+# 使用全局统一配置，防止路径不一致
 AUDIO_DIR = SETTINGS.AUDIO_DIR
 
 # 确保目录存在 (虽然 audio_ops 也会创建，但 Server 启动时最好检查一下)
@@ -92,7 +88,7 @@ async def chat_endpoint(request: ChatRequest, req_context: Request):
             ]
         }
         
-        # 🔥 运行 Agent (异步调用)
+        # 运行 Agent (异步调用)
         # 注意：这里调用的是 agent.agent_graph 里定义好的 graph
         final_state = await graph.ainvoke(inputs, config=config)
         

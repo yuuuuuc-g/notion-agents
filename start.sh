@@ -14,7 +14,7 @@ sleep 3
 
 # 3. 启动前端
 echo "💻 Starting Client (Streamlit)..."
-streamlit run app.py
+python -m streamlit run app.py
 
 # 4. 退出时清理后台进程
 kill $SERVER_PID

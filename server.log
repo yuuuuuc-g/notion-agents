@@ -1,22 +1,32 @@
-INFO:     Will watch for changes in these directories: ['/Users/eve/湛叔AI课/notion-prism-react']
+INFO:     Will watch for changes in these directories: ['/Users/eve/陈湛AI课/notion-prism-react']
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-INFO:     Started reloader process [57311] using WatchFiles
-🚀 Initializing SiliconFlow BGE-M3 Embedding...
-INFO:     Started server process [57338]
+INFO:     Started reloader process [19629] using WatchFiles
+🚀 Initializing Level-Chunk Vector Engine...
+🤖 [Agent] Running in SMART mode (Tools Enabled).
+INFO:     Started server process [19635]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 WARNING:  Invalid HTTP request received.
 WARNING:  Invalid HTTP request received.
+🚀 Initializing Level-Chunk Vector Engine...
+🤖 [Agent] Running in SMART mode (Tools Enabled).
+📨 Query: 记录笔记：
+
+人们早就知道马杜罗很快会被推翻。关于原因也有一些猜测。唯独缺失的是方式和时间。最大的问题曾是：之后呢？马杜罗倒台后委内瑞拉会发生什么？这个周末，部分疑虑开始解开，虽非全部。但这次袭击带来了一个确定的事实：我们生活的世界已不再是我们所熟知的那个了。 | Thread: de14d0ef-fffa-474d-a2a1-cf7a28569b18
+🕵️ [Tool] Searching: 马杜罗 委内瑞拉 政治局势...
+🔍 [Level-Chunk Search] Query: 马杜罗 委内瑞拉 政治局势...
+   No results found.
+✍️ [Tool] Action: CREATE | Title: 马杜罗政权倒台的预测与影响
+✍️ [Notion Ops] Creating Note: 马杜罗政权倒台的预测与影响
+✅ Page Created: 2e335e6b-0ea5-8173-aec8-c2468a3e3460
+💾 [Tool] Syncing to Vector DB: 2e335e6b-0ea5-8173-aec8-c2468a3e3460...
+📚 [Store] Saving Parent Document: 马杜罗政权倒台的预测与影响 (ID: 2e335e6b-0ea5-8173-aec8-c2468a3e3460)
+📚 [DocStore] Saved Parent Document: 2e335e6b...
+   ✂️ Split into 1 child chunks.
+   ✅ Indexed 1 chunks in ChromaDB.
+INFO:     127.0.0.1:57853 - "POST /chat HTTP/1.1" 200 OK
 WARNING:  Invalid HTTP request received.
 WARNING:  Invalid HTTP request received.
-🚀 Initializing SiliconFlow BGE-M3 Embedding...
-📨 Query: 把文本转成语音：Contemporary China presents a paradoxical picture: while macroeconomic data occasionally shows resilience, the micro-level experience is fraught with anxiety. From the youth unemployment crisis to the local government debt quagmire, from the strategic setbacks of the Belt and Road Initiative to the new economic normal of a "controlled depression," a web of structural challenges point toward a common epicenter. | Thread: d1de098a-4baf-4cee-8258-5513a4cfbb09
-🎤 Processing text (413 chars)...
-✅ Audio saved: generated_audio/audio_377c8b24.mp3
-INFO:     127.0.0.1:51925 - "POST /chat HTTP/1.1" 200 OK
-INFO:     127.0.0.1:51995 - "GET /audio/audio_377c8b24.mp3 HTTP/1.1" 206 Partial Content
-WARNING:  Invalid HTTP request received.
-INFO:     127.0.0.1:52015 - "GET /audio/audio_377c8b24.mp3 HTTP/1.1" 304 Not Modified
 WARNING:  Invalid HTTP request received.
 WARNING:  Invalid HTTP request received.
 WARNING:  Invalid HTTP request received.
@@ -26,16 +36,69 @@ WARNING:  Invalid HTTP request received.
 WARNING:  Invalid HTTP request received.
 WARNING:  Invalid HTTP request received.
 WARNING:  Invalid HTTP request received.
-📨 Query: 记录：2026年升级程序，完成整体架构层的更新，测试成功。 | Thread: d1de098a-4baf-4cee-8258-5513a4cfbb09
-INFO:     127.0.0.1:52196 - "GET /audio/audio_377c8b24.mp3 HTTP/1.1" 304 Not Modified
 WARNING:  Invalid HTTP request received.
-✍️ [Tool] Action: CREATE | Title: 2026年升级程序
-✍️ [Notion Ops] Creating Note: 2026年升级程序
-✅ Page Created: 2df35e6b-0ea5-814b-bfc8-de6a1979b3a8
-💾 [Tool] Syncing to Vector DB: 2df35e6b-0ea5-814b-bfc8-de6a1979b3a8...
-💾 Vectorizing memory: 2026年升级程序...
-✅ Memory stored in Vector DB (SiliconFlow).
-INFO:     127.0.0.1:52198 - "POST /chat HTTP/1.1" 200 OK
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+📨 Query: 这周末委内瑞拉发生了什么疑虑解开的事情？ | Thread: 91bedd4c-7a4f-4e5f-8530-12fae2858c07
+🕵️ [Tool] Searching: 这周末委内瑞拉发生了什么...
+🔍 [Level-Chunk Search] Query: 这周末委内瑞拉发生了什么...
+   🎯 Best Match: 马杜罗政权倒台的预测与影响 (Dist: 0.9064)
+   🔗 Fetching Parent Document from SQLite: 2e335e6b-0ea5-8173-aec8-c2468a3e3460...
+   ✅ Retrieved Full Context (208 chars).
+INFO:     127.0.0.1:58319 - "POST /chat HTTP/1.1" 200 OK
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
+WARNING:  Invalid HTTP request received.
 WARNING:  Invalid HTTP request received.
 WARNING:  Invalid HTTP request received.
 WARNING:  Invalid HTTP request received.
@@ -54,5 +117,5 @@ WARNING:  Invalid HTTP request received.
 INFO:     Shutting down
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
-INFO:     Finished server process [57338]
-INFO:     Stopping reloader process [57311]
+INFO:     Finished server process [19635]
+INFO:     Stopping reloader process [19629]

@@ -14,3 +14,4 @@ env/
 
 # 📦 依赖记录 (有了 requirements.txt 就不需要这个)
 pip-wheel-metadata/
+chroma_db

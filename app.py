@@ -167,7 +167,7 @@ with st.sidebar:
             if all_content:
                 st.session_state["file_content"] = all_content
                 st.session_state["current_file_list"] = current_file_names
-                st.success(f"📚 Loaded {total_files} files ({len(all_content)} chars)")
+                st.success(f"🌿 Loaded {total_files} files ({len(all_content)} chars)")
             else:
                 st.error("No valid text extracted.")
             
@@ -175,7 +175,7 @@ with st.sidebar:
             progress_bar.empty()
             status_text.empty()
         else:
-            st.success(f"📚 Ready: {len(uploaded_files)} files loaded")
+            st.success(f"🍄 Ready: {len(uploaded_files)} files loaded")
     else:
         # 如果用户手动删除了所有文件，清理状态
         if "file_content" in st.session_state:
@@ -227,9 +227,9 @@ if prompt := st.chat_input("Enter a note or topic..."):
 
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
-        with st.status("Thinking... (Connecting to Brain 🧠)", expanded=False) as status:
+        with st.status("Thinking... (Connecting to Brain 🌻)", expanded=False) as status:
             try:
-                status.write("🚀 Sending request...")
+                status.write("🌵 Sending request...")
                 response = send_request_with_retry(API_URL, payload)
                 
                 if response.status_code == 200:
