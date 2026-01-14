@@ -1,10 +1,12 @@
 """
 vector/embedding_provider.py
 定义嵌入模型 (Embedding Model) 的适配器
+👉 修复: 增加 input batch size > 64 的自动分批处理
 """
 from typing import List, Optional, Any, Union
 from openai import OpenAI  
 from config.settings import SETTINGS
+import time
 
 class SiliconFlowEmbedding:
     """
@@ -27,10 +29,8 @@ class SiliconFlowEmbedding:
     def name(self) -> str:
         return "SiliconFlow_BGE_M3"
 
-    # 用于将单个文本字符串转换为对应的向量嵌入（embedding），通常用于后续在向量数据库中检索或相似度比对。
     def _get_embedding(self, text: str) -> List[float]:
         """内部方法：获取单个文本的向量"""
-        # 🔥 防御性编程：确保 text 是字符串
         if not isinstance(text, str):
             text = str(text)
             
@@ -47,36 +47,51 @@ class SiliconFlowEmbedding:
             return []
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """批量生成向量"""
-        clean_texts = [str(t).replace("\n", " ") for t in texts]
-        try:
-            response = self.client.embeddings.create(
-                model=self.model_name,
-                input=clean_texts,
-                encoding_format="float"
-            )
-            data = sorted(response.data, key=lambda x: x.index)
-            return [item.embedding for item in data]
-        except Exception as e:
-            print(f"❌ Batch Embedding Error: {e}")
-            return []
+        """
+        批量生成向量
+        🔥 修复核心：增加分批逻辑，防止触发 413 (Max batch size 64)
+        """
+        all_embeddings = []
+        BATCH_SIZE = 50  # 保险起见，设为 50 (上限是 64)
+        
+        # 将 texts 列表切分成多个小批次
+        batches = [texts[i:i + BATCH_SIZE] for i in range(0, len(texts), BATCH_SIZE)]
+        
+        if len(batches) > 1:
+            print(f"   ⚡ Splitting {len(texts)} chunks into {len(batches)} batches for embedding...")
 
+        for idx, batch in enumerate(batches):
+            clean_batch = [str(t).replace("\n", " ") for t in batch]
+            try:
+                response = self.client.embeddings.create(
+                    model=self.model_name,
+                    input=clean_batch,
+                    encoding_format="float"
+                )
+                # 按 index 排序确保顺序一致
+                data = sorted(response.data, key=lambda x: x.index)
+                batch_embeddings = [item.embedding for item in data]
+                all_embeddings.extend(batch_embeddings)
+                
+                # 可选：如果你有大量数据，可以打印进度或稍微 sleep 一下防止 QPS 超限
+                # print(f"      - Embedding Batch {idx+1}/{len(batches)} done.")
+                
+            except Exception as e:
+                print(f"❌ Batch Embedding Error (Batch {idx+1}): {e}")
+                # 如果这一批失败了，为了不让程序崩溃，只能填空向量 (或者抛出异常)
+                # 这里我们选择填空，但会打印错误
+                all_embeddings.extend([[] for _ in range(len(batch))])
+
+        return all_embeddings
 
     def embed_query(self, text: Optional[Union[str, List[str]]] = None, **kwargs) -> List[float]:
-        """
-        获取查询向量
-        🔥 修复：兼容 list 类型的输入 (防止 LangChain 传入 list 导致报错)
-        """
+        """获取查询向量"""
         final_input = text or kwargs.get("input")
-        
-        # 处理 list 输入的情况 (取第一个元素)
         if isinstance(final_input, list):
             if not final_input: return []
             final_input = final_input[0]
-            
         if not final_input:
             return []
-            
         return self._get_embedding(final_input)
 
     def __call__(self, input: List[str]) -> List[List[float]]:

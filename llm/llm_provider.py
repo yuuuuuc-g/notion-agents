@@ -13,7 +13,7 @@ def get_llm():
     else:
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
-        model="deepseek/deepseek-chat", 
+        model=SETTINGS.LLM_MODEL_NAME, 
         # 👇 直接从 SETTINGS 取值
         api_key=SETTINGS.OPENAI_API_KEY,
         base_url=SETTINGS.OPENAI_BASE_URL,

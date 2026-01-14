@@ -8,10 +8,41 @@ __pycache__/
 .venv/
 venv/
 env/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+*.egg
+pip-log.txt
+pip-delete-this-directory.txt
 
 # 🍏 Mac 系统垃圾
 .DS_Store
+*.DS_Store
 
 # 📦 依赖记录 (有了 requirements.txt 就不需要这个)
 pip-wheel-metadata/
-chroma_db
+
+# 🗄️ 项目生成的数据文件
+chroma_db/               # ChromaDB vector database
+generated_audio/         # Generated audio files
+doc_store.db            # SQLite document metadata database
+*.db                    # Any other SQLite databases
+*.db-journal            # SQLite journal files
+
+# 🚀 前端构建文件 (Next.js)
+web/.next/
+web/node_modules/
+web/out/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 📝 IDE 配置文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

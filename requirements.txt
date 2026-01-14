@@ -1,24 +1,28 @@
 # 核心框架
-langgraph>=1.0.0
-langchain>=0.3.0
-langchain-openai>=0.2.0
-langchain-core
-langchain-community
+langgraph==0.6.11
+langchain-openai==0.3.35
+langchain-core==0.3.81
+# Note: langchain-community not installed, removing as likely unused
 
-# Web 服务
-fastapi
-uvicorn
+# Web 服务  
+fastapi==0.123.9
+uvicorn==0.38.0
 python-multipart
 streamlit
 
 # 业务工具
 chromadb
 notion-client
-python-dotenv
+python-dotenv==1.2.1
 pypdf
-requests
+requests==2.32.5
 ebookLib
 beautifulsoup4
-watchdog
+watchdog==6.0.0
 edge-tts
 pydub
+httpx==0.28.1
+redis
+
+# 缺失的关键依赖 (已确认在代码中使用)
+openai==2.14.0

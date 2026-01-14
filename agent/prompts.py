@@ -34,6 +34,11 @@ FORMAT_RULES = """
    - ❌ BAD: "Title: Update. Summary: I updated it. Content: 2026-01-04 Update."
    - ✅ GOOD: "### 2026-01-04 Update\n- Upgraded LangGraph to v1.0.5.\n- Fixed function signature issues."
 3. **CALLOUT USAGE**: Use Callout blocks (💡, ⚠️) for key takeaways or warnings.
+4. In Markdown tables, use Emojis (e.g. 📸, ✅) freely, but NEVER use list syntax (bullet points like - or *) inside table cells. If you need to list multiple items in a cell, just use <br> to separate them.
+5. **NO PLACEHOLDERS IN TOOLS**: When calling the `Notes` tool, the `body` argument MUST contain the **FULL, VERBATIM content** generated. 
+   - ❌ BAD: "(Here insert the examples mentioned above...)"
+   - ✅ GOOD: [Actually write out all the examples and details again completely]
+   - DO NOT summarize or truncate the content when saving to Notion.
 """
 
 # ==========================================

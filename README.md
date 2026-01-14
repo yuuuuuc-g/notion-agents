@@ -1,166 +1,135 @@
 # 🌱 Exocortex (Notion-Prism-React)
 
-> **你的个人认知外延系统 (Your Personal Cognitive Extension)。**
-> 基于 **Client-Server 架构** 的多模态智能 Agent，集成 "大脑外延" 知识管理与 "AI 语音助教"。
+> **Enterprise-Grade Personal Cognitive OS.**
+> 基于 **Next.js + FastAPI + LangGraph** 的生产级全栈智能体系统。
 
-**Exocortex** 是一个经过深度工程化重构的自动化系统。它采用了现代化的 **前后端分离** 与 **领域驱动设计 (DDD)**：后端 (**FastAPI**) 作为“大脑”负责逻辑思考与工具调用，前端 (**Streamlit**) 作为“皮肤”负责交互与展示。
-
-它采用 **混合云 AI 架构 (Hybrid Cloud AI Stack)**，通过 **OpenRouter** 连接顶级大模型进行思考，通过 **SiliconFlow (硅基流动)** 进行高性能向量化，告别了沉重的本地模型依赖，实现了**云原生、低延迟、高稳定性**的运行体验。
-
----
-
-## ✨ 核心特性
-
-### 🏗️ 工业级分层架构 (Decoupled & Modular)
-
-* **Client-Server 分离**：
-    * **🧠 Server (FastAPI)**：独立运行的后端服务。负责 LangGraph 状态流转、Notion 写入、音频生成及向量检索。即便前端关闭，大脑依然在线。
-    * **💻 Client (Streamlit)**：极简的“瘦客户端”。只负责发送 HTTP 请求和播放媒体，彻底解决了 Streamlit 刷新导致上下文丢失与内存泄漏的问题。
-* **模块化领域设计**：告别扁平脚本，采用 `config`, `agent`, `vector` 等独立模块，职责边界清晰，维护成本极低。
-
-### 🧠 Level-Chunk 高级检索 (Context-Aware RAG) [NEW]
-
-* **父子索引策略 (Parent-Child Indexing)**：
-    * **Child (Vector)**：将文档切碎为小片段存入 ChromaDB，实现精准的语义匹配。
-    * **Parent (Storage)**：将完整文档存入 SQLite (`doc_store.db`)。
-    * **Retrieval**：搜索时命中“细节”，返回时自动回溯“全貌”，确保 AI 回答具备完整的上下文背景。
-
-### ☁️ 云原生与极致轻量
-
-* **Docker 容器化**：提供标准 `Dockerfile` 与 `docker-compose`，支持一键拉起整套环境，无需配置本地 Python 依赖，开箱即用。
-* **零本地模型负担**：移除 `torch`、`transformers` 等 GB 级依赖，安装包体积缩减 90%。
-* **双脑协同**：
-    * **思考 (Chat)**：集成 **OpenRouter (DeepSeek/GPT-4o)**，低成本获取顶级推理能力。
-    * **记忆 (Embedding)**：集成 **SiliconFlow (BAAI/bge-m3)**，利用国内直连的高性能 Embedding 服务。
-
-### 🤖 双轨智能决策 (ReAct & Graph)
-
-* **Graph 编排器**：基于 **LangGraph** 状态机，Agent 拥有清晰的思考路径（State Management）。
-* **Agent 路由**：后端根据意图自动分流：
-    * 🟢 **音频快车道**：跳过 RAG，直接调用 TTS 工具，极速响应。
-    * 🔵 **知识慢车道**：执行深度检索、去重、Notion 写入与 ChromaDB 同步。
+**Exocortex** 不是一个简单的聊天 Demo，它是一套**数据主权自控**的个人知识操作系统。
+它采用 **Client-Server 架构**，结合 **领域驱动设计 (DDD)**，实现了从“瞬时交互”到“长期记忆”的完整闭环。
 
 ---
 
-## 🏗️ 系统架构
+## 🏗️ 系统架构设计 (Architecture Blueprint)
 
-### 📂 项目结构 (Directory Structure)
+系统严格遵循 **分层架构 (Layered Architecture)** 原则，各层职责边界清晰。
+
+### 1. 接入层 (Presentation Layer)
+* **🚀 User Interface (Next.js)**: 
+    * 基于 **React 19** 构建的现代化 SPA。
+    * **职责**: 处理高频交互（Chat）、流式渲染（Streaming）、文件拖拽。
+    * **特性**: 零刷新、WebSocket/SSE 支持、CORS 直连后端。
+* **🛠️ Admin Dashboard (Streamlit)**:
+    * **职责**: 知识库可视化管理、向量索引调试、Prompt 迭代。
+    * **特性**: 快速数据可视化，作为“系统后台”存在。
+
+### 2. 核心逻辑层 (Application Core)
+* **🧠 Brain Server (FastAPI)**: 
+    * RESTful API 设计，通过 Pydantic 进行严格的数据校验。
+    * **Async/Await**: 全链路异步处理，解决 Python 并发瓶颈。
+* **⚙️ Agent Orchestrator (LangGraph)**:
+    * 放弃线性脚本，采用 **图 (Graph)** 结构管理 Agent 状态。
+    * 支持 **循环思考 (Loop)**、**自我修正 (Reflection)** 和 **多路径路由 (Routing)**。
+
+### 3. 数据持久层 (Data Persistence) - "漏斗模型"
+* **🔥 Hot (Redis)**: [Session/Cache]
+    * 存储会话上下文、上传文件的临时内容、任务队列状态。
+    * *Value*: 解决大文本重复传输问题，实现无状态 API。
+* **🟡 Warm (SQLite)**: [Metadata]
+    * 存储文档元数据 (Meta-store)、父子索引关联关系 (Parent-Child Map)。
+* **🧊 Cold (ChromaDB + Notion)**: [Long-term]
+    * **ChromaDB**: 存储语义向量 (Embeddings)，用于模糊检索。
+    * **Notion**: 存储人类可读笔记，作为最终的知识归档地。
+
+---
+
+## 🛠️ 技术栈清单 (Tech Stack)
+
+| 模块 | 技术选型 | 选型理由 |
+| :--- | :--- | :--- |
+| **Frontend** | **Next.js (React)** + Tailwind | 工业级交互体验，生态最强。 |
+| **Backend** | **FastAPI** (Python 3.10+) | 高性能异步框架，原生支持 OpenAPI。 |
+| **Orchestration** | **LangGraph** | 比 LangChain Chain 更灵活的状态机管理。 |
+| **LLM Provider** | **OpenRouter** (DeepSeek/GPT4) | 聚合接口，低成本，高可用。 |
+| **Embedding** | **SiliconFlow** (BGE-M3) | 国内直连，SOTA 级的中文向量效果。 |
+| **Vector DB** | **ChromaDB** | 轻量级、本地化、易于 Docker 部署。 |
+| **Cache** | **Redis** | (生产环境标准) 高速缓存与消息队列。 |
+| **DevOps** | **Docker Compose** | 一键拉起全栈环境，环境隔离。 |
+
+---
+
+## 📂 领域驱动目录结构 (Directory Structure)
 
 ```text
 exocortex/
-├── config/               # ⚙️ Config: 统一管理 Env 与全局常量
-│   └── settings.py       
-├── agent/                # 🧠 Agent: 大脑皮层
-│   ├── agent_graph.py    #    - 思考路径 (LangGraph)
-│   └── prompts.py        #    - 提示词管理 (SOP & Identity)
-├── audio/                # 🔊 Domain: 音频服务
-│   └── audio_ops.py      #    - TTS 生成与切片逻辑
-├── notion/               # 📝 Domain: 知识库服务
-│   ├── block_builder.py  #    - 排版工 (Markdown -> Blocks)
-│   └── notion_ops.py     #    - 快递员 (Notion API CRUD)
-├── vector/               # 💾 Domain: 向量记忆 (Level-Chunk Core)
-│   ├── embedding_provider.py # - 适配器 (SiliconFlow fix)
-│   ├── vector_store.py   #    - 索引管理 (ChromaDB + Parent ID Logic)
-│   ├── doc_store.py      #    - [NEW] 父文档存储 (SQLite)
-│   └── splitter.py       #    - [NEW] 智能切分器
-├── llm/                  # 🤖 Provider: 模型工厂
-│   └── llm_provider.py   
-├── tools/                # 🛠️ Tools: 外部工具定义 (LangChain)
-├── server.py             # 🚪 Entry: 后端入口 (FastAPI)
-├── app.py                # 💻 Entry: 前端入口 (Streamlit)
-├── docker-compose.yml    # 🐳 Docker: 容器编排
-├── Dockerfile            # 🐳 Docker: 镜像构建
-├── start.sh              # 🚀 Script: 本地一键启动
-├── requirements.txt      # 📦 Deps: 依赖清单
-└── .env                  # 🔐 Secrets: 密钥文件
+├── web/                    # ⚛️ [Frontend] Next.js 项目
+│   ├── src/components/     #    - UI 组件 (UploadZone, ChatBubble)
+│   ├── src/services/       #    - API 请求封装
+│   └── next.config.ts      #    - 路由配置
+├── server/                 # 🧠 [Backend] 核心代码库
+│   ├── api/                #    - 接口层 (Routes)
+│   ├── core/               #    - 全局配置 (Config, Logging)
+│   ├── domain/             #    - 领域逻辑 (DDD Core)
+│   │   ├── agent/          #      - LangGraph 状态机
+│   │   ├── notion/         #      - Notion 同步逻辑
+│   │   └── vector/         #      - 向量检索逻辑
+│   ├── infrastructure/     #    - 基础设施适配器
+│   │   ├── cache/          #      - Redis 客户端封装
+│   │   ├── llm/            #      - LLM Provider 封装
+│   │   └── storage/        #      - SQLite/Chroma 封装
+│   └── service/            #    - 应用服务 (业务流程编排)
+├── docker/                 # 🐳 部署配置
+├── server.py               # 🚀 启动入口
+├── requirements.txt        # 📦 后端依赖
+└── docker-compose.yml      # 🐙 全栈编排文件
 
 ```
-
-### 🔄 架构演进 (Evolution)
-
-* **Phase 1 (Script)**: 原始阶段。单一 Python 脚本，采用硬编码的线性逻辑。
-* **Phase 2 (Graph Workflow)**: **逻辑升级**。引入 **LangGraph** 编排器，工作流可视化。
-* **Phase 3 (Client-Server)**: **服务化**。彻底分离 FastAPI 后端与 Streamlit 前端。
-* **Phase 4 (Modular Refactor)**: **工程化**。引入 DDD (领域驱动设计) 与配置中心。
-* **Phase 5 (Cognitive Depth & Container)**: **深度进化**。引入 Level-Chunk 索引策略（见树木亦见森林）与 Docker 容器化部署。
 
 ---
 
-## 🚀 快速开始
+## 🚀 生产环境启动 (Production Start)
 
-### 方式 A：Docker 容器化启动 (推荐) 🐳
+### 前置要求
 
-最稳定、最干净的运行方式。
+* Docker & Docker Compose
+* OpenAI/OpenRouter API Key
+* Notion Integration Token
+
+### 一键启动
 
 ```bash
-# 1. 启动服务 (后台运行)
-docker compose up -d
+# 拉起 Redis, Chroma, FastAPI, Streamlit
+docker compose up -d --build
 
-# 2. 访问
-# 前端: http://localhost:8501
-# API 文档: http://localhost:8000/docs
+# 进入 Next.js 开发模式 (独立启动以便热更)
+cd web && npm run dev
 
-# 3. 停止服务
-docker compose down
-
-```
-
-### 方式 B：本地 Python 启动
-
-适用于调试或开发。
-
-1. **安装依赖**
-```bash
-pip install -r requirements.txt
-# 注意：本地运行需手动安装 FFmpeg (macOS: brew install ffmpeg)
+# 查看后台日志
+docker compose logs -f --tail=50 exocortex
 
 ```
-
-
-2. **配置环境变量**
-复制 `.env.example` 为 `.env` 并填入 Key。
-3. **启动脚本**
-```bash
-chmod +x start.sh
-./start.sh
-
-```
-
-
 
 ---
 
-## 📖 使用指南
+## 🗺️ Roadmap (架构落地计划)
 
-### 1. 语言学习 (Text-to-Speech)
-
-> **User**: "把这句话转成西班牙语：La vida es sueño."
-> **Flow**: Client -> API -> Graph (Router) -> TTS Tool -> 生成 MP3 -> 返回 URL -> Client 播放。
-
-### 2. 知识库构建 (RAG)
-
-> **User**: "把这篇关于 Transformer 的笔记存入 Notion。"
-> **Flow**: Client -> API -> Graph (Planner) -> DocStore (Save Parent) -> Chroma (Save Child) -> Notion API。
-
-### 3. 历史回溯 (Context Retrieval)
-
-> **User**: "我上周关于委内瑞拉局势的分析，核心观点是什么？"
-> **Flow**: Client -> API -> Vector Search (Hit Child Chunk) -> **Fetch Parent (SQLite)** -> LLM Summarize -> Answer。
-
----
-
-## 🔧 未来规划 (Roadmap)
-
-* [x] **架构解耦**：完成 FastAPI 与 Streamlit 的分离。✅
-* [x] **代码模块化**：完成核心逻辑的 DDD 重构。✅
-* [x] **向量服务迁移**：从不稳定的 OpenRouter 迁移至高性能 SiliconFlow。✅
-* [x] **高级检索增强 (Advanced RAG)**：实现 Level-Chunk (父子索引) 策略。✅
-* [x] **Docker 化**：实现一键容器化部署。✅
-* [ ] **语音输入 (STT)**：集成 OpenAI Whisper / Groq，给 Exocortex 加上“耳朵”。
-* [ ] **MCP 深度集成**：完善 `mcp_server.py`，支持 IDE 直接调用知识库。
+* [x] **Phase 1: 解耦** - 前后端分离，Docker 化。 ✅
+* [ ] **Phase 2: 缓存** - 引入 Redis 替代内存字典，实现真正的无状态后端。
+* [ ] **Phase 3: 异步** - 引入 BackgroundTasks，将 Notion 写入改为后台任务。
+* [ ] **Phase 4: 记忆** - 完善 SQLite 父子索引，优化 RAG 召回率。
 
 ---
 
 ## 📜 License
 
 MIT License.
+
+```
+
+---
+
+### 👨‍🏫 架构师的执行建议 (Next Steps)
+
+现在架构定型了，为了避免“踩坑”，我们接下来的开发顺序必须严格：
+
+1.  **基础设施先行**：在 `docker-compose.yml` 里加上 **Redis**。不要怕麻烦，现在不加以后加更痛。
+2.  **后端改造**：修改 `server.py`，引入 Redis 客户端。把之前的“全局字典”换成 Redis 操作。
+3.  **前端对接**：前端 UI 不用大改，只需要对接新的 API 逻辑（传 ID 而不是传文本）。

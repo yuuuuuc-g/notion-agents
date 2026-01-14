@@ -1,26 +1,55 @@
+version: '3.8'
+
+# 定义一个内部网络，让所有服务互通
+networks:
+  exocortex_net:
+    driver: bridge
+
+# 定义数据卷，用于持久化保存
+volumes:
+  chroma_db:
+  redis_data:  # 🆕 新增：Redis 数据卷
+
 services:
+  # 🧠 1. 核心大脑 (FastAPI + Streamlit Legacy)
   exocortex:
     build: .
     container_name: exocortex_v2
-    
-    # --- 端口映射 ---
-    # 左边是电脑端口 : 右边是容器端口
     ports:
-      - "8501:8501"  # 前端 Streamlit
-      - "8000:8000"  # 后端 API
-    
-    # --- 环境变量 ---
-    # 直接读取你本地的 .env 文件
+      - "8501:8501" # Streamlit 后台
+      - "8000:8000" # FastAPI 接口
     env_file:
       - .env
-    
-    # --- 数据持久化 (Volumes) ---
-    # 关键！把容器里的数据文件夹映射到你电脑上
-    # 这样即使删了容器，数据还在你硬盘里
+    environment:
+      - PYTHONUNBUFFERED=1
+      # 告诉后端：Redis 在哪里 (使用容器名 'redis')
+      - REDIS_HOST=redis 
+      - REDIS_PORT=6379
+      # 代理配置 (保持你之前的设置)
+      - HTTP_PROXY=http://host.docker.internal:7890
+      - HTTPS_PROXY=http://host.docker.internal:7890
+      - ALL_PROXY=socks5://host.docker.internal:7890
+      # 🚨 必填：让容器内服务直连，不走代理
+      - NO_PROXY=localhost,127.0.0.1,0.0.0.0,redis,exocortex_v2
+      - no_proxy=localhost,127.0.0.1,0.0.0.0,redis,exocortex_v2
     volumes:
-      - ./chroma_db:/app/chroma_db           # 向量数据库
-      - ./generated_audio:/app/generated_audio # 生成的音频
-      - ./doc_store.db:/app/doc_store.db       # SQLite 父文档库
-      
-    # 自动重启策略
+      - ./chroma_db:/app/chroma_db
+      - ./generated_audio:/app/generated_audio
+      - ./doc_store.db:/app/doc_store.db
+    depends_on:
+      - redis # 🆕 等 Redis 启动了再启动
+    networks:
+      - exocortex_net
+    restart: always
+
+  # ⚡ 2. 瞬时记忆体 (Redis) [NEW]
+  redis:
+    image: redis:alpine
+    container_name: exocortex_redis
+    ports:
+      - "6379:6379" # 暴露端口以便本地调试 (可选)
+    volumes:
+      - redis_data:/data
+    networks:
+      - exocortex_net
     restart: always
