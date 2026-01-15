@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import UploadZone from "@/components/UploadZone"; 
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import rehypeSanitize from "rehype-sanitize";
 
 interface Message {
   role: "user" | "assistant";
@@ -46,7 +47,7 @@ export default function Home() {
     setIsLoading(true);
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await fetch("http://localhost:8000/upload", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -66,29 +67,42 @@ export default function Home() {
       let done = false;
       let aiResponse = "";
 
+      // --- 流式读取循环 ---
       while (!done) {
         const { value, done: doneReading } = await reader.read();
         done = doneReading;
+        
+        // 1. 解码并累加字符串
         const chunkValue = decoder.decode(value, { stream: true });
         aiResponse += chunkValue;
+    
+        // 2. 🔍 实时正则检测：匹配后端工具返回的 [AUDIO_URL: audio_xxx.mp3]
+        const audioMatch = aiResponse.match(/\[AUDIO_URL:\s*(audio_[a-f0-9]+\.mp3)\]/i);
 
-        const audioMatch = aiResponse.match(/\/app\/generated_audio\/(audio_[a-f0-9]+\.mp3)/);
         let audioUrl = undefined;
         if (audioMatch) {
+            const filename = audioMatch[1];
             const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-            audioUrl = `${backendUrl}/audio/${audioMatch[1]}`;
+            audioUrl = `${backendUrl}/audio/${filename}`;
         }
 
+        // 3. 实时更新 React 状态
         setMessages((prev) => {
-          const newMessages = [...prev];
-          const lastMsg = newMessages[newMessages.length - 1];
-          if (lastMsg.role === "assistant") {
-            lastMsg.content = aiResponse;
-            if (audioUrl) lastMsg.audioUrl = audioUrl;
-          }
-          return newMessages;
+            const newMessages = [...prev];
+            const lastMsg = newMessages[newMessages.length - 1];
+            
+            // 确保更新的是当前 AI 正在回复的那条消息
+            if (lastMsg.role === "assistant") {
+                lastMsg.content = aiResponse;
+                
+                // 核心逻辑：一旦正则匹配到 URL 且当前消息还没有绑定过 audioUrl，就赋值
+                if (audioUrl && !lastMsg.audioUrl) {
+                    lastMsg.audioUrl = audioUrl;
+                }
+            }
+            return newMessages;
         });
-      }
+      } // --- 循环结束 ---
 
     } catch (error) {
       console.error(error);
@@ -116,7 +130,7 @@ export default function Home() {
     setMessages(prev => [...prev, { role: "assistant", content: "🔍 Reading files..." }]);
 
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: formData });
+      const res = await fetch("http://localhost:8000/upload", { method: "POST", body: formData });
       const data = await res.json();
       if (data.status === "success") {
         setFileId(data.file_id);
@@ -242,6 +256,7 @@ export default function Home() {
                         `}>
                             <ReactMarkdown 
                                 remarkPlugins={[remarkGfm]}
+                                rehypePlugins={[rehypeSanitize]}
                                 components={{
                                     a: ({...props}) => (
                                         <a {...props} target="_blank" rel="noopener noreferrer" />

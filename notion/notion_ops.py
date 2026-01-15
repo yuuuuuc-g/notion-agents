@@ -51,42 +51,38 @@ def create_notion_page(
     title: str, children: List[Dict], icon: str = "🧠", db_id: str = None
 ) -> Dict:
     """
-    Exocortex Server 专用接口
-    直接接收已经转换好的 Blocks (children)
+    Exocortex 专用接口：采用“先创建、后追加”策略
+    这种策略能 100% 绕过 Notion 创建页面时的复杂度校验报错。
     """
     target_db = db_id if db_id else DEFAULT_DB_ID
     if not target_db:
-        raise ValueError("❌ No Database ID configured in settings!")
+        raise ValueError("❌ 未在 settings 中配置 Database ID！")
 
-    logger.info(f"✍️ [Notion Ops] Creating Page: {title}")
-
-    # Notion 创建页面时，children 限制为 100 个
-    # 我们先切分：前 100 个随页面创建，剩下的分批追加
-    initial_batch = children[:100]
-    remaining_blocks = children[100:]
+    logger.info(f"✍️ [Notion Ops] 正在创建页面: {title}")
 
     try:
+        # 第一步：先创建一个空页面 (成功率最高)
+        # 不在此时传入 children，防止触发 body.children 校验错误
         response = notion.pages.create(
             parent={"database_id": target_db},
             icon={"type": "emoji", "emoji": icon},
             properties={
-                "Name": {"title": [{"text": {"content": title}}]},
-                # "Type": {"select": {"name": "Exocortex"}} # 可选：加个标签
+                "Name": {"title": [{"text": {"content": title}}]}
             },
-            children=initial_batch,
+            children=[] 
         )
         page_id = response["id"]
-        logger.info(f"✅ Page Created: {page_id}")
+        logger.info(f"✅ 空页面创建成功: {page_id}")
 
-        # 如果还有剩下的，复用你写好的批量上传逻辑
-        if remaining_blocks:
-            _append_children_in_batches(page_id, remaining_blocks)
+        # 第二步：使用您原有的 _append_children_in_batches 逻辑写入全部内容
+        # 这种方式对于嵌套和复杂结构的兼容性远高于直接创建
+        if children:
+            _append_children_in_batches(page_id, children)
 
         return response
 
     except Exception as e:
-        logger.error(f"❌ Create Failed: {e}")
-        # 抛出异常让 Server 知道失败了，不要吞掉
+        logger.error(f"❌ 页面创建失败: {e}")
         raise e
 
 

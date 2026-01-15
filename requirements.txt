@@ -9,6 +9,7 @@ fastapi==0.123.9
 uvicorn==0.38.0
 python-multipart
 streamlit
+slowapi==0.1.9  # API 限流中间件
 
 # 业务工具
 chromadb
@@ -23,6 +24,8 @@ edge-tts
 pydub
 httpx==0.28.1
 redis
+python-magic==0.4.27  # MIME 类型验证
+itsdangerous==2.2.0  # CSRF token 生成和验证
 
 # 缺失的关键依赖 (已确认在代码中使用)
 openai==2.14.0

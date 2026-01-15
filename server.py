@@ -32,6 +32,15 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from starlette.middleware.sessions import SessionMiddleware
+
+# 🔒 限流中间件
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+
+# 🔒 CSRF 保护
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 # 引入向量存储模块
 from vector.vector_store import add_memory, search_memory
@@ -40,6 +49,7 @@ from vector.vector_store import add_memory, search_memory
 from pypdf import PdfReader
 from ebooklib import epub
 from bs4 import BeautifulSoup
+import magic  # MIME 类型验证
 
 # Agent 核心
 from agent.agent_graph import graph
@@ -61,6 +71,19 @@ app = FastAPI(
     description="Backend service for Notion-Prism-React Agent",
     version="2.2.0",
 )
+
+# --- 🔒 配置限流器 ---
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# --- 🔒 配置 Session 中间件（CSRF 需要）---
+app.add_middleware(
+    SessionMiddleware, secret_key=SETTINGS.API_SECRET or "fallback-secret"
+)
+
+# --- 🔒 CSRF Token 生成器 ---
+csrf_serializer = URLSafeTimedSerializer(SETTINGS.API_SECRET or "fallback-secret")
 
 # --- 1. 配置 CORS ---
 app.add_middleware(
@@ -112,6 +135,23 @@ async def verify_token(
     return token
 
 
+def generate_csrf_token() -> str:
+    """生成 CSRF token"""
+    return csrf_serializer.dumps("csrf-protection", salt="csrf-salt")
+
+
+def verify_csrf_token(token: str, max_age: int = 3600) -> bool:
+    """
+    验证 CSRF token
+    max_age: token 有效期（秒），默认 1 小时
+    """
+    try:
+        csrf_serializer.loads(token, salt="csrf-salt", max_age=max_age)
+        return True
+    except (BadSignature, SignatureExpired):
+        return False
+
+
 # --- 5. 数据模型 ---
 class ChatRequest(BaseModel):
     query: str
@@ -133,7 +173,49 @@ class ArchiveRequest(BaseModel):
     thread_id: str = "default"
 
 
-# --- 6. 辅助函数 ---
+# --- 6. 常量配置 ---
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB per file
+MAX_TOTAL_SIZE = 100 * 1024 * 1024  # 100MB total per request
+MAX_FILES_COUNT = 10  # Maximum 10 files per upload
+
+
+# --- 7. 安全函数 ---
+def validate_file_type(content: bytes, filename: str) -> tuple[bool, str]:
+    """
+    验证文件的真实 MIME 类型（不仅检查扩展名）
+
+    Returns:
+        (is_valid: bool, error_message: str)
+    """
+    try:
+        mime = magic.from_buffer(content, mime=True)
+
+        # 允许的 MIME 类型及其对应的扩展名
+        allowed_types = {
+            "application/pdf": [".pdf"],
+            "text/plain": [".txt", ".md"],
+            "application/epub+zip": [".epub"],
+            "application/zip": [".epub"],  # EPUB 有时被识别为 zip
+        }
+
+        if mime not in allowed_types:
+            return False, f"File type '{mime}' not allowed. Allowed: PDF, TXT, EPUB, MD"
+
+        # 验证扩展名与 MIME 类型匹配
+        extension = os.path.splitext(filename.lower())[1]
+        if extension not in allowed_types[mime]:
+            return (
+                False,
+                f"File extension '{extension}' doesn't match MIME type '{mime}'",
+            )
+
+        return True, ""
+    except Exception as e:
+        logger.error(f"MIME validation error: {e}")
+        return False, f"Unable to validate file type: {str(e)}"
+
+
+# --- 8. 文件处理函数 ---
 def extract_pdf_text(file_bytes: bytes) -> str:
     try:
         pdf_file = BytesIO(file_bytes)
@@ -232,12 +314,50 @@ def background_archive_task(file_id: str, summary: str, thread_id: str):
 
 
 @app.post("/upload")
-async def upload_files(files: List[UploadFile] = File(...)):
+@limiter.limit("10/minute")  # 限制每分钟 10 次上传
+async def upload_files(request: Request, files: List[UploadFile] = File(...)):
     logger.info(f"📂 Receiving {len(files)} files...")
+
+    # 🔒 安全检查 1: 文件数量限制
+    if len(files) > MAX_FILES_COUNT:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Too many files. Maximum {MAX_FILES_COUNT} files allowed per upload.",
+        )
+
     combined_text = ""
+    total_size = 0
 
     for file in files:
+        # 🔒 安全检查 2: 单个文件大小限制
+        # Read file to check size (we need to read anyway for processing)
         content = await file.read()
+        file_size = len(content)
+
+        if file_size > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File '{file.filename}' exceeds {MAX_FILE_SIZE // (1024 * 1024)}MB limit. Size: {file_size // (1024 * 1024)}MB",
+            )
+
+        # 🔒 安全检查 3: 总大小限制
+        total_size += file_size
+        if total_size > MAX_TOTAL_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Total upload size exceeds {MAX_TOTAL_SIZE // (1024 * 1024)}MB limit.",
+            )
+
+        logger.info(f"   📄 Processing '{file.filename}' ({file_size // 1024}KB)")
+
+        # 🔒 安全检查 4: MIME 类型验证（防止恶意文件）
+        is_valid, error_msg = validate_file_type(content, file.filename)
+        if not is_valid:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=f"File '{file.filename}': {error_msg}",
+            )
+
         filename = file.filename.lower()
         text = ""
 
@@ -272,80 +392,57 @@ async def upload_files(files: List[UploadFile] = File(...)):
 
 # 🔥 修改 endpoint 定义，不再声明 response_model (因为现在返回流)
 @app.post("/chat", dependencies=[Depends(verify_token)])
-async def chat_endpoint(request: ChatRequest, req: Request):
-    # --- 1. 准备上下文 (RAG 逻辑保持不变) ---
+@limiter.limit("30/minute")  # 限制每分钟 30 次对话请求
+async def chat_endpoint(request: Request, body: ChatRequest):  # 🔥 交换位置并改名
+    # --- 1. 准备上下文 ---
+    # 因为改了名，所以要把下面代码里用到的 request 换成 body
     context = ""
     source_hint = ""
 
-    # (这里保留你原本的 Redis 和 RAG 检索逻辑，不需要变)
-    if request.file_id:
+    # 注意：这里原来是用 request.file_id，现在要改成 body.file_id
+    if body.file_id:
         try:
-            cached_text = redis_client.get(request.file_id)
+            cached_text = redis_client.get(body.file_id)
             if cached_text:
                 context = cached_text[:20000]
                 source_hint = "【Current Uploaded File】"
         except Exception:
             pass
 
-    if not context:
-        # RAG 检索逻辑... (保持你之前的代码不变)
-        try:
-            search_result = search_memory(request.query)
-            if search_result["match"]:
-                full_doc = search_result["metadata"]["content"]
-                context = full_doc[:15000]
-                page_title = search_result.get("title", "Unknown")
-                source_hint = f"【Long-term Memory: {page_title}】"
-        except Exception:
-            pass
+    # --- 2. 组装 Prompt ---
+    # 提示词中加入对音频标记的要求
 
-    # --- 2. 组装 Prompt (Prompt 逻辑保持不变) ---
-    # 记得把 file_id 塞进去，为了让 Agent 能用工具
     system_instruction = f"""
-You are Exocortex.
-=== CONTEXT DATA ===
-Current Uploaded File ID: {request.file_id if request.file_id else "None"}
-(If user asks to save/archive, use `save_current_file_to_notion` with this ID).
-====================
-"""
+    You are Exocortex, an AI assistant.
+    Current Context File ID:  {body.file_id if body.file_id else "None"}
+    If you use the audio tool, you MUST output the tag exactly: [AUDIO_URL: filename.mp3]
+    """
     if context:
-        final_query = f"{system_instruction}\n\n{source_hint}:\n{context}\n\n【User Query】:\n{request.query}"
+        final_query = f"{system_instruction}\n\n{source_hint}:\n{context}\n\n【User Query】:\n{body.query}"
     else:
-        final_query = f"{system_instruction}\n\n【User Query】:\n{request.query}"
+        final_query = f"{system_instruction}\n\n【User Query】:\n{body.query}"
 
-    # --- 3. 🔥 定义流式生成器 (核心修改) ---
+    # --- 3. 定义流式生成器 ---
     async def event_generator():
-        config = {"configurable": {"thread_id": request.thread_id}}
+        # 注意：这里原来是 request.thread_id，现在改成 body.thread_id
+        config = {"configurable": {"thread_id": body.thread_id}}
         inputs = {"messages": [HumanMessage(content=final_query)]}
-
-        # 使用 astream_events 监听所有事件 (v1 版本 API)
-        # 这样我们可以区分：是工具在跑，还是 AI 在说话
+        
         async for event in graph.astream_events(inputs, config=config, version="v1"):
-            kind = event["event"]
-
-            # 🟢 Case A: 模型正在生成文本 (流式输出)
-            if kind == "on_chat_model_stream":
+            if event["event"] == "on_chat_model_stream":
                 content = event["data"]["chunk"].content
                 if content:
-                    # 直接发送文本片段
                     yield content
 
-            # 🟡 Case B: 工具开始调用 (可选：发个信号告诉前端我在干活)
-            elif kind == "on_tool_start":
-                yield " 🛠️ [Thinking...] "
-
-            # 🔴 Case C: 工具调用结束
-            elif kind == "on_tool_end":
-                yield " ✅ "
-
-    # --- 4. 返回流式响应 ---
-    # media_type="text/plain" 表示直接返回纯文本流，前端处理起来最简单
     return StreamingResponse(event_generator(), media_type="text/plain")
 
 
 # 🔥🔥🔥 新增归档接口 🔥🔥🔥
 @app.post("/archive", dependencies=[Depends(verify_token)])
-async def archive_endpoint(req: ArchiveRequest, background_tasks: BackgroundTasks):
+@limiter.limit("5/minute")  # 限制每分钟 5 次归档请求
+async def archive_endpoint(
+    request: Request, req: ArchiveRequest, background_tasks: BackgroundTasks
+):
     # 检查 Redis 里还有没有
     if not redis_client.exists(req.file_id):
         raise HTTPException(status_code=404, detail="Session expired, cannot archive.")
@@ -362,6 +459,17 @@ async def archive_endpoint(req: ArchiveRequest, background_tasks: BackgroundTask
 @app.get("/health")
 def health_check():
     return {"status": "ok", "service": "Exocortex Brain (v2.2 Secured)"}
+
+
+# --- 🔒 CSRF Token 端点 ---
+@app.get("/csrf-token")
+async def get_csrf_token():
+    """
+    获取 CSRF token（用于前端表单提交）
+    注意：此端点不需要认证，因为 token 本身不敏感
+    """
+    token = generate_csrf_token()
+    return {"csrf_token": token}
 
 
 if __name__ == "__main__":

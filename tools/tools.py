@@ -17,6 +17,13 @@ from audio.audio_ops import generate_audio_file
 from notion import notion_ops
 from vector import vector_store as vector_ops
 
+redis_client_tool = redis.Redis(
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", 6379)),
+    db=0,
+    decode_responses=True 
+)
+
 @tool
 async def search_knowledge_base(query: str) -> str:
     """
@@ -149,21 +156,16 @@ async def manage_notion_note(
 @tool
 async def convert_text_to_audio(text: str, language: str = 'es'):
     """
-    Converts text to audio file. 
-    Use this tool IMMEDIATELY when user asks for "speak", "read", "audio", or "listen".
+    将文本转换为语音文件。
     """
-    result = await generate_audio_file(text, language)
+    result = await generate_audio_file(text, language) 
     if result:
-        return f"✅ Audio generated successfully. Path: {result}"
+        # 提取文件名，例如 audio_c608908f.mp3
+        filename = os.path.basename(result)
+        # 返回一个前端易于识别的标记
+        return f"✅ 音频已生成！[AUDIO_URL: {filename}]"
     else:
-        return "❌ Audio generation failed."
-
-redis_client_tool = redis.Redis(
-    host=os.getenv("REDIS_HOST", "localhost"),
-    port=int(os.getenv("REDIS_PORT", 6379)),
-    db=0,
-    decode_responses=True 
-)
+        return "❌ 语音生成失败。"
 
 @tool
 async def save_current_file_to_notion(file_id: str, summary: str, title: str):

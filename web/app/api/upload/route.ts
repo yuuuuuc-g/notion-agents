@@ -13,11 +13,13 @@ export async function POST(req: NextRequest) {
     // Get form data from the request
     const formData = await req.formData();
 
-    // Validate that files exist
-    const files = formData.getAll('files') as File[];
-    if (!files || files.length === 0) {
+    // 🔒 安全的类型验证：使用 type guard 替代类型断言
+    const rawFiles = formData.getAll('files');
+    const files = rawFiles.filter((f): f is File => f instanceof File);
+    
+    if (files.length === 0) {
       return NextResponse.json(
-        { error: 'No files provided' },
+        { error: 'No valid files provided' },
         { status: 400 }
       );
     }
