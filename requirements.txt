@@ -1,31 +1,40 @@
-# 核心框架
-langgraph==0.6.11
-langchain-openai==0.3.35
-langchain-core==0.3.81
-# Note: langchain-community not installed, removing as likely unused
+# --- 核心框架 (降级至稳定版以解决依赖冲突) ---
+# 确保 langchain 体系版本一致，避免 0.3.x 与旧版的冲突
+langchain>=0.3.0
+langchain-openai>=0.3.0
+langchain-core>=0.3.0
+langchain-community>=0.3.0
+langgraph>=0.2.0
 
-# Web 服务  
-fastapi==0.123.9
-uvicorn==0.38.0
-python-multipart
-streamlit
-slowapi==0.1.9  # API 限流中间件
+# --- Web 服务 (降级至 0.115.x 稳定分支) ---
+fastapi==0.115.6
+uvicorn==0.34.0
+python-multipart==0.0.20
+streamlit==1.41.0
+slowapi==0.1.9
 
-# 业务工具
-chromadb
-notion-client
-python-dotenv==1.2.1
-pypdf
-requests==2.32.5
-ebookLib
-beautifulsoup4
-watchdog==6.0.0
-edge-tts
-pydub
-httpx==0.28.1
-redis
-python-magic==0.4.27  # MIME 类型验证
-itsdangerous==2.2.0  # CSRF token 生成和验证
+# --- 存储与数据库 ---
+chromadb>=0.5.0
+redis>=5.0.0
+# 元数据处理
+pydantic>=2.10.0
 
-# 缺失的关键依赖 (已确认在代码中使用)
-openai==2.14.0
+# --- 业务工具与集成 ---
+notion-client==2.2.1
+python-dotenv==1.0.1
+requests==2.32.3
+httpx[socks]==0.27.2
+openai>=1.50.0
+
+# --- 文件处理与音频 ---
+pypdf==5.1.0
+ebookLib==0.18
+beautifulsoup4==4.12.3
+edge-tts==6.1.12
+pydub==0.25.1
+python-magic==0.4.27
+itsdangerous==2.2.0
+
+# --- 辅助工具 ---
+watchdog==5.0.3
+pytest==8.3.4

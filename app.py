@@ -4,17 +4,18 @@ Streamlit Client
 已修复: 适配后端流式输出 (Streaming) + 语音自动提取，同时保留原版 UI 渲染
 """
 
-import streamlit as st
-import uuid
-import tempfile
 import os
-import requests
-import time
-import sys
-import warnings
 import re  # 🆕 新增：用于正则提取音频链接
+import sys
+import tempfile
+import time
+import uuid
+import warnings
 from io import BytesIO
-from requests.exceptions import ConnectionError, Timeout, RequestException
+
+import requests
+import streamlit as st
+from requests.exceptions import ConnectionError, RequestException, Timeout
 
 # ---------------------------------------------------------
 # 配置区域
@@ -50,9 +51,7 @@ def send_request_with_retry(url, payload, max_retries=3, timeout=120):
             if attempt == max_retries - 1:
                 raise e
             time.sleep(1)
-            st.toast(
-                f"⚠️ 网络波动，正在重试 ({attempt + 1}/{max_retries})...", icon="🔄"
-            )
+            st.toast(f"⚠️ 网络波动，正在重试 ({attempt + 1}/{max_retries})...", icon="🔄")
         except RequestException as e:
             raise e
 
@@ -62,8 +61,8 @@ def send_request_with_retry(url, payload, max_retries=3, timeout=120):
 # ---------------------------------------------------------
 def extract_text_from_epub(file_stream):
     try:
-        from ebooklib import epub
         from bs4 import BeautifulSoup
+        from ebooklib import epub
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".epub") as tmp_file:
             tmp_file.write(file_stream.read())
@@ -256,9 +255,7 @@ if prompt := st.chat_input("Enter a note or topic..."):
     with st.chat_message("assistant"):
         message_placeholder = st.empty()
         # 保留原本的 Status UI，看起来更丝滑
-        with st.status(
-            "Thinking... (Connecting to Brain 🌻)", expanded=False
-        ) as status:
+        with st.status("Thinking... (Connecting to Brain 🌻)", expanded=False) as status:
             try:
                 # 🔥 核心修改：使用 stream=True
                 response = requests.post(

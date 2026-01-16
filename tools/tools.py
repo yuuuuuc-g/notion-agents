@@ -1,50 +1,55 @@
 """
 tools/tools.py
-LangChain 工具定义
-已修复: 
-1. P0 同步阻塞 (asyncio.to_thread)
-2. P1 双写不一致 (添加事务回滚逻辑)
+LangChain 工具定义 (生产级最终版)
+✅ 架构：完全遵循 DI (依赖注入)，由 RunnableConfig 提供服务实例。
+✅ 事务：严格保持 Notion 与 VectorDB 的双写一致性，失败必回滚。
+✅ 性能：使用 asyncio.to_thread 确保同步 IO 不阻塞事件循环。
 """
-import json
 import asyncio
-from langchain_core.tools import tool
-from typing import Optional
-import redis
+import json
 import os
+from typing import Optional
 
-# 引用各个业务模块
+import redis
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
+
+# 仅引用逻辑模块与接口
 from audio.audio_ops import generate_audio_file
-from notion import notion_ops
+from notion.block_builder import markdown_to_blocks
 from vector import vector_store as vector_ops
 
+# Redis 连接 (基础设施层)
 redis_client_tool = redis.Redis(
     host=os.getenv("REDIS_HOST", "localhost"),
     port=int(os.getenv("REDIS_PORT", 6379)),
     db=0,
-    decode_responses=True 
+    decode_responses=True,
 )
+
 
 @tool
 async def search_knowledge_base(query: str) -> str:
     """
-    REQUIRED step before writing.
-    Search the database to check if a topic already exists.
-    Useful for finding duplicate notes or answering questions.
+    必选步骤。在写入前搜索数据库，检查主题是否已存在。
     """
-    print(f"🕵️ [Tool] Searching: {query}...")
-    
+    print(f"🕵️ [Tool] 正在检索向量库: {query}...")
     result = await asyncio.to_thread(vector_ops.search_memory, query, domain="All")
-    
+
     if result.get("match"):
-        return json.dumps({
-            "found": True,
-            "title": result.get("title"),
-            "page_id": result.get("page_id"),
-            "summary": result.get("metadata", {}).get("summary", ""),
-            "existing_content": result.get("metadata", {}).get("content", "")[:1500] 
-        }, ensure_ascii=False)
-    else:
-        return json.dumps({"found": False, "message": "No relevant notes found."})
+        return json.dumps(
+            {
+                "found": True,
+                "title": result.get("title"),
+                "page_id": result.get("page_id"),
+                "existing_content": result.get("metadata", {}).get("content", "")[
+                    :1500
+                ],
+            },
+            ensure_ascii=False,
+        )
+    return json.dumps({"found": False, "message": "未找到相关笔记。"})
+
 
 @tool
 async def manage_notion_note(
@@ -53,170 +58,139 @@ async def manage_notion_note(
     content_markdown: str,
     summary: str,
     category: str = "General",
-    target_page_id: Optional[str] = None
+    target_page_id: Optional[str] = None,
+    config: RunnableConfig = None,
 ) -> str:
     """
-    The ONLY tool to write/save content to Notion.
-    It automatically syncs the new content to the Vector Database for future retrieval.
-    
-    Args:
-        action: "create" OR "overwrite".
-        title: The title of the note.
-        content_markdown: The full content in Markdown format.
-        summary: A short summary.
-        category: Must be one of ["Spanish", "Tech", "Humanities", "General"].
-        target_page_id: REQUIRED if action is "overwrite".
+    Notion 读写的唯一工具。会自动同步到向量库。
     """
-    print(f"✍️ [Tool] Action: {action.upper()} | Title: {title}")
-    
-    draft_data = {
-        "title": title,
-        "summary": summary,
-        "markdown_body": content_markdown,
-        "tags": [category, "AI-Auto"]
-    }
-    
-    db_map = {
-        "Spanish": notion_ops.DB_SPANISH_ID,
-        "Tech": notion_ops.DB_TECH_ID,
-        "Humanities": notion_ops.DB_HUMANITIES_ID
-    }
-    target_db_id = db_map.get(category, notion_ops.DB_HUMANITIES_ID)
+    print(f"✍️ [Tool] 动作: {action.upper()} | 标题: {title}")
 
+    # 从注入的上下文获取服务实例
+    configurable = config.get("configurable", {})
+    notion_service = configurable.get("notion_service")
+    db_ids = configurable.get("db_ids", {})
+
+    if not notion_service:
+        return "❌ 错误：Notion 服务未在 Context 中初始化。"
+
+    target_db_id = db_ids.get(category, db_ids.get("General"))
     current_page_id = None
-    success = False
-    is_new_page = False # 标记是否是新创建的页面，用于回滚判断
+    is_new_page = False
 
     try:
-        # --- 第一步：Notion 操作 ---
+        # --- 步骤 1：Notion 写入 ---
         if action == "overwrite":
             if not target_page_id:
-                return "Error: target_page_id is required for overwrite action."
-            
+                return "错误: 重写操作必须提供 target_page_id。"
+
             success = await asyncio.to_thread(
-                notion_ops.overwrite_page_content, 
-                target_page_id, 
-                draft_data
+                notion_service.overwrite_page_content,
+                target_page_id,
+                content_markdown,
+                summary,
             )
-            if success: current_page_id = target_page_id
+            if success:
+                current_page_id = target_page_id
             else:
-                return "❌ Failed to overwrite Notion page. It might be deleted."
-                
+                return "❌ 无法重写 Notion 页面，页面可能已被删除。"
         else:
             # Action = create
-            current_page_id = await asyncio.to_thread(
-                notion_ops.create_general_note, 
-                draft_data, 
-                target_db_id
+            blocks = markdown_to_blocks(content_markdown)
+            response = await asyncio.to_thread(
+                notion_service.create_page, title, blocks, db_id=target_db_id
             )
+            current_page_id = response.get("id")
             if current_page_id:
-                success = True
                 is_new_page = True
 
-        # --- 第二步：Vector 同步 (带回滚) ---
-        if success and current_page_id:
-            print(f"💾 [Tool] Syncing to Vector DB: {current_page_id}...")
-            
+        # --- 步骤 2：向量库同步 (带回滚机制) ---
+        if current_page_id:
+            print(f"💾 [Tool] 正在同步到向量库: {current_page_id}...")
             try:
-                # 尝试写入向量库
-                full_semantic_text = f"Title: {title}\nSummary: {summary}\n\n{content_markdown}"
-                
+                full_semantic_text = (
+                    f"Title: {title}\nSummary: {summary}\n\n{content_markdown}"
+                )
                 await asyncio.to_thread(
                     vector_ops.add_memory,
                     page_id=current_page_id,
                     text=full_semantic_text,
                     title=title,
                     domain=category,
-                    metadata={
-                        "summary": summary,
-                        "type": "note",
-                        "content": content_markdown[:2000]
-                    }
+                    metadata={"summary": summary},
                 )
-                
-                return f"✅ Success! Note saved to Notion and indexed in Vector DB.\n🔗 URL: https://www.notion.so/{current_page_id.replace('-', '')}"
+                return f"✅ 成功！笔记已保存并索引。\n🔗 URL: https://www.notion.so/{current_page_id.replace('-', '')}"
 
             except Exception as vec_error:
                 # 🔥 关键回滚逻辑 🔥
-                print(f"⚠️ Vector Sync Failed: {vec_error}. Initiating Rollback...")
-                
-                # 只有当这是新创建的页面时，我们才删除它进行回滚
-                # 如果是 overwrite，删除页面会导致用户旧数据丢失，所以overwrite失败一般保留页面但报错
+                print(f"⚠️ 向量同步失败: {vec_error}。正在执行事务回滚...")
                 if is_new_page:
-                    await asyncio.to_thread(notion_ops.delete_page, current_page_id)
-                    return f"❌ Error: Vector database sync failed ({vec_error}). To ensure data consistency, the Notion page was NOT saved (Rolled back)."
+                    # 只有新创建的页面才执行物理删除回滚
+                    await asyncio.to_thread(notion_service.delete_page, current_page_id)
+                    return "❌ 事务失败：向量库同步出错，已回滚并删除 Notion 页面以保持一致性。"
                 else:
-                    return f"⚠️ Warning: Note updated in Notion, but Vector sync failed ({vec_error}). Search capability for this note may be broken."
+                    return "⚠️ 警告：Notion 已更新，但向量库同步失败，检索可能受限。"
 
     except Exception as e:
-        return f"❌ System Error in manage_notion_note: {str(e)}"
-            
-    return "❌ Failed to save note to Notion."
+        return f"❌ 系统错误: {str(e)}"
+
+    return "❌ 保存失败。"
+
 
 @tool
-async def convert_text_to_audio(text: str, language: str = 'es'):
-    """
-    将文本转换为语音文件。
-    """
-    result = await generate_audio_file(text, language) 
+async def convert_text_to_audio(text: str, language: str = "es"):
+    """将文本转换为语音。"""
+    result = await generate_audio_file(text, language)
     if result:
-        # 提取文件名，例如 audio_c608908f.mp3
-        filename = os.path.basename(result)
-        # 返回一个前端易于识别的标记
-        return f"✅ 音频已生成！[AUDIO_URL: {filename}]"
-    else:
-        return "❌ 语音生成失败。"
+        return f"✅ 音频已生成！[AUDIO_URL: {os.path.basename(result)}]"
+    return "❌ 语音生成失败。"
+
 
 @tool
-async def save_current_file_to_notion(file_id: str, summary: str, title: str):
+async def save_current_file_to_notion(
+    file_id: str, summary: str, title: str, config: RunnableConfig = None
+):
     """
-    Use this tool ONLY when the user asks to "save", "archive", or "keep" the CURRENTLY uploaded file to Notion.
-    The tool will automatically fetch the full content from Redis using the file_id.
-    
-    Args:
-        file_id: The ID of the file (provided in the system prompt context).
-        summary: A short summary of the content.
-        title: A title for the Notion page.
+    将当前上传的文件存档至 Notion。
     """
-    print(f"🤖 [Tool] Agent triggering auto-save for file: {file_id}")
-    
-    # 1. 工具自己去 Redis 拿原文，不劳烦 AI 传参
+    print(f"🤖 [Tool] 正在自动存档文件: {file_id}")
     full_text = redis_client_tool.get(file_id)
-    
     if not full_text:
-        return "❌ Error: File content expired or not found. Please upload again."
+        return "❌ 错误：文件内容已过期或不存在。"
 
-    # 2. 调用你已有的逻辑 (复用 manage_notion_note 的内部逻辑，或者直接调 notion_ops)
-    # 这里我们模拟调用 manage_notion_note 的行为
+    configurable = config.get("configurable", {})
+    notion_service = configurable.get("notion_service")
+    db_ids = configurable.get("db_ids", {})
+
     try:
-        draft_data = {
-            "title": title,
-            "summary": summary,
-            "markdown_body": full_text, # 填入原文
-            "tags": ["Agent-Archived"]
-        }
-        
-        # 默认存到 Tech 库 (你可以改为让 AI 传 category)
-        page_id = await asyncio.to_thread(
-            notion_ops.create_general_note, 
-            draft_data, 
-            notion_ops.DB_TECH_ID 
+        blocks = markdown_to_blocks(full_text)
+        res = await asyncio.to_thread(
+            notion_service.create_page, title, blocks, db_id=db_ids.get("Tech")
         )
-        
+        page_id = res.get("id")
+
         if page_id:
-            # 3. 顺便做向量化
-            await asyncio.to_thread(
-                vector_ops.add_memory,
-                page_id=page_id,
-                text=full_text,
-                title=title,
-                metadata={"summary": summary}
-            )
-            return f"✅ Successfully saved to Notion! Page ID: {page_id}"
-        else:
-            return "❌ Failed to create Notion page."
-            
+            try:
+                await asyncio.to_thread(
+                    vector_ops.add_memory,
+                    page_id=page_id,
+                    text=full_text,
+                    title=title,
+                    metadata={"summary": summary},
+                )
+                return f"✅ 存档成功！ID: {page_id}"
+            except Exception:
+                # 🔥 自动存档的回滚逻辑
+                await asyncio.to_thread(notion_service.delete_page, page_id)
+                return "❌ 存档失败：向量索引出错，Notion 页面已回滚。"
     except Exception as e:
-        return f"❌ Tool Error: {str(e)}"
-    
-tools_list = [search_knowledge_base, manage_notion_note, convert_text_to_audio, save_current_file_to_notion]
+        return f"❌ 工具执行错误: {str(e)}"
+    return "❌ 存档失败。"
+
+
+tools_list = [
+    search_knowledge_base,
+    manage_notion_note,
+    convert_text_to_audio,
+    save_current_file_to_notion,
+]

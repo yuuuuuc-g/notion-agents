@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import UploadZone from "@/components/UploadZone"; 
+import UploadZone from "@/components/UploadZone";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
@@ -17,9 +17,9 @@ export default function Home() {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [fileId, setFileId] = useState<string | null>(null);
-  
+
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -36,30 +36,35 @@ export default function Home() {
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
-    
+
     const userMsg: Message = { role: "user", content: input };
     setMessages((prev) => [...prev, userMsg]);
     setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
-    
-    const currentInput = input; 
+
+    const currentInput = input;
     setInput("");
-    if (textareaRef.current) textareaRef.current.style.height = "auto"; 
+    if (textareaRef.current) textareaRef.current.style.height = "auto";
     setIsLoading(true);
 
     try {
-      const res = await fetch("http://localhost:8000/upload", {
+      // 修正 A: 接口地址从 /upload 改为 /chat
+      const res = await fetch("http://localhost:8000/chat", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          // 修正 B: 增加 Authorization 验证（值需与后端 SETTINGS.API_SECRET 一致）
+          // 建议你暂时检查后端 SETTINGS 里的 API_SECRET 是什么
+          "Authorization": `Bearer ${process.env.NEXT_PUBLIC_API_SECRET}`
         },
         body: JSON.stringify({
             query: currentInput,
             thread_id: "react-user",
-            file_id: fileId
+            file_id: fileId,
+            model_name: "deepseek/deepseek-chat"
         }),
       });
 
-      if (!res.ok) throw new Error("Network error");
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
       if (!res.body) throw new Error("No response body");
 
       const reader = res.body.getReader();
@@ -71,11 +76,11 @@ export default function Home() {
       while (!done) {
         const { value, done: doneReading } = await reader.read();
         done = doneReading;
-        
+
         // 1. 解码并累加字符串
         const chunkValue = decoder.decode(value, { stream: true });
         aiResponse += chunkValue;
-    
+
         // 2. 🔍 实时正则检测：匹配后端工具返回的 [AUDIO_URL: audio_xxx.mp3]
         const audioMatch = aiResponse.match(/\[AUDIO_URL:\s*(audio_[a-f0-9]+\.mp3)\]/i);
 
@@ -90,11 +95,11 @@ export default function Home() {
         setMessages((prev) => {
             const newMessages = [...prev];
             const lastMsg = newMessages[newMessages.length - 1];
-            
+
             // 确保更新的是当前 AI 正在回复的那条消息
             if (lastMsg.role === "assistant") {
                 lastMsg.content = aiResponse;
-                
+
                 // 核心逻辑：一旦正则匹配到 URL 且当前消息还没有绑定过 audioUrl，就赋值
                 if (audioUrl && !lastMsg.audioUrl) {
                     lastMsg.audioUrl = audioUrl;
@@ -126,6 +131,7 @@ export default function Home() {
 
   const handleFiles = async (files: File[]) => {
     const formData = new FormData();
+    // 关键：把 "files" 改为 "file"，与后端 server.py 的 alias="file" 对齐
     files.forEach(file => formData.append("files", file));
     setMessages(prev => [...prev, { role: "assistant", content: "🔍 Reading files..." }]);
 
@@ -168,9 +174,9 @@ export default function Home() {
       `}</style>
 
       {/* 🟢 左侧侧边栏 */}
-      <aside 
+      <aside
         className={`
-            bg-[#f9fafb] border-r border-gray-200 flex flex-col 
+            bg-[#f9fafb] border-r border-gray-200 flex flex-col
             transition-all duration-300 ease-in-out overflow-hidden
             ${isSidebarOpen ? 'w-80 p-6 opacity-100' : 'w-0 p-0 opacity-0'}
             hidden md:flex flex-shrink-0 z-20
@@ -202,8 +208,8 @@ export default function Home() {
                     </div>
                 </div>
             ) : null}
-            
-            <button 
+
+            <button
                 onClick={() => window.location.reload()}
                 className="w-full py-2 px-4 rounded-xl border border-gray-200 text-gray-600 text-sm hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
             >
@@ -214,7 +220,7 @@ export default function Home() {
 
       {/* 🔵 右侧主区域 */}
       <main className="flex-1 flex flex-col h-full relative bg-white min-w-0">
-        
+
         {/* 侧边栏切换按钮 */}
         <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -239,7 +245,7 @@ export default function Home() {
         */}
         <div className="flex-1 overflow-y-auto scroll-smooth">
             <div className="max-w-4xl mx-auto w-full px-4 md:px-8 pt-20 pb-52 space-y-6">
-                
+
                 {messages.length === 0 && (
                     <div className="flex flex-col items-center justify-center h-[60vh] text-gray-300 space-y-4">
                         <div className="text-6xl opacity-10 grayscale">🌱</div>
@@ -250,11 +256,11 @@ export default function Home() {
                     <div key={idx} className={`flex w-full ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                         <div className={`
                             max-w-[90%] md:max-w-[80%] p-4 rounded-2xl text-base leading-relaxed shadow-sm prose
-                            ${msg.role === "user" 
-                                ? "bg-[#eff6ff] text-gray-800 rounded-br-sm user-msg" 
+                            ${msg.role === "user"
+                                ? "bg-[#eff6ff] text-gray-800 rounded-br-sm user-msg"
                                 : "bg-white border border-gray-100 text-gray-800 rounded-bl-sm"}
                         `}>
-                            <ReactMarkdown 
+                            <ReactMarkdown
                                 remarkPlugins={[remarkGfm]}
                                 rehypePlugins={[rehypeSanitize]}
                                 components={{
@@ -274,7 +280,7 @@ export default function Home() {
                         </div>
                     </div>
                 ))}
-                
+
                 {isLoading && messages.length > 0 && messages[messages.length-1].role !== 'assistant' && (
                     <div className="flex justify-start">
                         <div className="bg-white p-4 rounded-2xl border border-gray-100 flex items-center gap-2">
@@ -297,7 +303,7 @@ export default function Home() {
             <div className="max-w-4xl mx-auto w-full relative group">
                 {/* 发光背景特效 */}
                 <div className="absolute inset-0 bg-gradient-to-r from-emerald-100 to-blue-100 rounded-[2rem] blur opacity-20 group-hover:opacity-40 transition-opacity"></div>
-                
+
                 <div className="relative flex items-end gap-2 bg-[#f8f9fa] border border-gray-200 rounded-[2rem] shadow-sm hover:shadow-md transition-all duration-300 p-2 pl-4 focus-within:ring-2 focus-within:ring-emerald-100 focus-within:border-emerald-200 focus-within:bg-white">
                     <textarea
                         ref={textareaRef}
@@ -316,8 +322,8 @@ export default function Home() {
                         disabled={isLoading || !input.trim()}
                         className={`
                             mb-1 p-2 rounded-full w-10 h-10 flex items-center justify-center transition-all
-                            ${input.trim() 
-                                ? "bg-gray-800 text-white hover:bg-black shadow-md transform hover:scale-105" 
+                            ${input.trim()
+                                ? "bg-gray-800 text-white hover:bg-black shadow-md transform hover:scale-105"
                                 : "text-gray-300 cursor-not-allowed"}
                         `}
                     >

@@ -27,7 +27,7 @@ export default function UploadZone({ onFilesSelected, isUploading }: UploadZoneP
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    
+
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       // 把 FileList 转成数组
       const filesArray = Array.from(e.dataTransfer.files);
@@ -51,7 +51,7 @@ export default function UploadZone({ onFilesSelected, isUploading }: UploadZoneP
       onDrop={handleDrop}
       className={`
         relative border-2 border-dashed rounded-lg p-8 text-center transition-all cursor-pointer
-        ${isDragOver 
+        ${isDragOver
           ? "border-green-500 bg-green-50 scale-[1.02]" // 拖进来时变绿、放大
           : "border-gray-300 bg-gray-50 hover:bg-gray-100" // 平时是灰色
         }
@@ -65,7 +65,7 @@ export default function UploadZone({ onFilesSelected, isUploading }: UploadZoneP
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
         onChange={handleChange}
       />
-      
+
       <div className="flex flex-col items-center justify-center space-y-2">
         <span className="text-4xl">📄</span>
         <p className="text-sm font-medium text-gray-600">

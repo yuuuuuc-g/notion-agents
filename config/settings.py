@@ -5,8 +5,9 @@ config/settings.py
 """
 
 import os
-from dotenv import load_dotenv
 from typing import Optional
+
+from dotenv import load_dotenv
 
 # 加载 .env 文件
 load_dotenv()

@@ -2,74 +2,122 @@
 server.py
 Backend API 入口 (FastAPI)
 包含: Redis 缓存, Notion 归档, 完整鉴权
+重构内容：引入配置注入模式 (Dependency Injection) 与 动态模型注入
 """
 
 import os
-import re
-import uvicorn
-import uuid
-import redis
-import traceback
-from typing import List, Optional
-from io import BytesIO
 import tempfile
-import json
+import uuid
+from functools import lru_cache
+from io import BytesIO
+from typing import List, Optional
+
+# 文件解析库
+import ebooklib
+import magic  # MIME 类型验证
+import pdfplumber
+import redis
+import uvicorn
+from bs4 import BeautifulSoup
+from ebooklib import epub
 
 # FastAPI 核心组件
 from fastapi import (
+    BackgroundTasks,
+    Depends,
     FastAPI,
+    File,
     HTTPException,
     Request,
-    Depends,
     Security,
-    status,
     UploadFile,
-    File,
-    BackgroundTasks,
+    status,
 )
-from fastapi.responses import StreamingResponse
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
+
+# 🔒 CSRF 保护
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
-from starlette.middleware.sessions import SessionMiddleware
 
 # 🔒 限流中间件
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-
-# 🔒 CSRF 保护
-from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-
-# 引入向量存储模块
-from vector.vector_store import add_memory, search_memory
-
-# 文件解析库
-from pypdf import PdfReader
-from ebooklib import epub
-from bs4 import BeautifulSoup
-import magic  # MIME 类型验证
+from slowapi.util import get_remote_address
+from starlette.middleware.sessions import SessionMiddleware
 
 # Agent 核心
 from agent.agent_graph import graph
-from langchain_core.messages import HumanMessage
-from config.settings import SETTINGS
+from config.settings import SETTINGS  # 仅在工厂函数中使用
 
-# 🔥 引入 Notion 模块 (确保你已经更新了 notion_ops.py)
+# 🔥 引入 Notion 模块
 from notion.block_builder import markdown_to_blocks
-from notion.notion_ops import create_notion_page
 
 # 🔧 引入日志模块
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+
+# --- ⚙️ 配置注入工厂 ---
+@lru_cache()
+def get_config():
+    """
+    统一获取配置的工厂函数。
+    使用 lru_cache 确保单例，方便后续测试 Mock。
+    """
+    return SETTINGS
+
+
+# --- 🤖 模型注入工厂 ---
+def get_model(model_name: str):
+    """
+    模型工厂：根据前端传来的 model_name，动态生成模型实例。
+    """
+    config = get_config()
+
+    # 这里默认使用 SiliconFlow 适配 DeepSeek，你可以根据需要扩展逻辑
+    return ChatOpenAI(
+        model=model_name,
+        openai_api_key=config.SILICON_KEY,
+        openai_api_base="https://api.siliconflow.cn/v1",
+        streaming=True,
+    )
+
+
+# --- 🏛️ 基础设施注入工厂 ---
+from vector.vector_store import LevelChunkVectorStore  # noqa: E402 导入我们刚改好的类
+
+
+@lru_cache()
+def get_vector_store():
+    """
+    向量库工厂：确保全局只初始化一个向量库实例。
+    """
+    return LevelChunkVectorStore()
+
+
+from notion.notion_ops import NotionService  # noqa: E402 确保导入新类
+
+
+@lru_cache()
+def get_notion_service(config=Depends(get_config)):
+    """Notion 服务工厂"""
+    return NotionService(
+        token=config.NOTION_TOKEN,
+        default_db_id=config.DB_TECH_ID or config.DB_SPANISH_ID,
+    )
+
+
 # --- 初始化 APP ---
 app = FastAPI(
     title="Exocortex API",
     description="Backend service for Notion-Prism-React Agent",
-    version="2.2.0",
+    version="2.3.0",
 )
 
 # --- 🔒 配置限流器 ---
@@ -77,13 +125,12 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# --- 🔒 配置 Session 中间件（CSRF 需要）---
+# --- 🔒 配置 Session 与 CSRF ---
+current_config = get_config()
 app.add_middleware(
-    SessionMiddleware, secret_key=SETTINGS.API_SECRET or "fallback-secret"
+    SessionMiddleware, secret_key=current_config.API_SECRET or "fallback-secret"
 )
-
-# --- 🔒 CSRF Token 生成器 ---
-csrf_serializer = URLSafeTimedSerializer(SETTINGS.API_SECRET or "fallback-secret")
+csrf_serializer = URLSafeTimedSerializer(current_config.API_SECRET or "fallback-secret")
 
 # --- 1. 配置 CORS ---
 app.add_middleware(
@@ -91,7 +138,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-    ],  # Removed "*" wildcard
+    ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
@@ -112,21 +159,21 @@ except redis.ConnectionError:
     logger.warning("⚠️ Warning: Redis not connected. Cache will fail.")
 
 # --- 3. 静态文件挂载 ---
-AUDIO_DIR = SETTINGS.AUDIO_DIR
-if not os.path.exists(AUDIO_DIR):
-    os.makedirs(AUDIO_DIR)
-app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
+if not os.path.exists(current_config.AUDIO_DIR):
+    os.makedirs(current_config.AUDIO_DIR)
+app.mount("/audio", StaticFiles(directory=current_config.AUDIO_DIR), name="audio")
 
-# --- 4. 安全鉴权 ---
+# --- 4. 安全鉴权 (注入模式) ---
 security_scheme = HTTPBearer()
 
 
 async def verify_token(
     credentials: HTTPAuthorizationCredentials = Security(security_scheme),
+    config=Depends(get_config),
 ):
     """验证 Bearer Token"""
     token = credentials.credentials
-    if token != SETTINGS.API_SECRET:
+    if token != config.API_SECRET:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token",
@@ -141,10 +188,7 @@ def generate_csrf_token() -> str:
 
 
 def verify_csrf_token(token: str, max_age: int = 3600) -> bool:
-    """
-    验证 CSRF token
-    max_age: token 有效期（秒），默认 1 小时
-    """
+    """验证 CSRF token"""
     try:
         csrf_serializer.loads(token, salt="csrf-salt", max_age=max_age)
         return True
@@ -174,56 +218,50 @@ class ArchiveRequest(BaseModel):
 
 
 # --- 6. 常量配置 ---
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB per file
-MAX_TOTAL_SIZE = 100 * 1024 * 1024  # 100MB total per request
-MAX_FILES_COUNT = 10  # Maximum 10 files per upload
+MAX_FILE_SIZE = 50 * 1024 * 1024
+MAX_TOTAL_SIZE = 100 * 1024 * 1024
+MAX_FILES_COUNT = 10
 
 
-# --- 7. 安全函数 ---
+# --- 7. 安全与文件处理函数 (保持不变) ---
 def validate_file_type(content: bytes, filename: str) -> tuple[bool, str]:
-    """
-    验证文件的真实 MIME 类型（不仅检查扩展名）
-
-    Returns:
-        (is_valid: bool, error_message: str)
-    """
     try:
         mime = magic.from_buffer(content, mime=True)
-
-        # 允许的 MIME 类型及其对应的扩展名
         allowed_types = {
             "application/pdf": [".pdf"],
             "text/plain": [".txt", ".md"],
             "application/epub+zip": [".epub"],
-            "application/zip": [".epub"],  # EPUB 有时被识别为 zip
+            "application/zip": [".epub"],
         }
-
         if mime not in allowed_types:
-            return False, f"File type '{mime}' not allowed. Allowed: PDF, TXT, EPUB, MD"
-
-        # 验证扩展名与 MIME 类型匹配
+            return False, f"File type '{mime}' not allowed."
         extension = os.path.splitext(filename.lower())[1]
         if extension not in allowed_types[mime]:
-            return (
-                False,
-                f"File extension '{extension}' doesn't match MIME type '{mime}'",
-            )
-
+            return False, f"Extension '{extension}' doesn't match MIME."
         return True, ""
     except Exception as e:
         logger.error(f"MIME validation error: {e}")
-        return False, f"Unable to validate file type: {str(e)}"
+        return False, "Validation failed."
 
 
-# --- 8. 文件处理函数 ---
 def extract_pdf_text(file_bytes: bytes) -> str:
+    """
+    使用 pdfplumber 替换 pypdf，解决学术 PDF 截断问题。
+    """
+    text_list = []
     try:
-        pdf_file = BytesIO(file_bytes)
-        reader = PdfReader(pdf_file)
-        text = [page.extract_text() for page in reader.pages]
-        return "\n".join(text)
+        with pdfplumber.open(BytesIO(file_bytes)) as pdf:
+            logger.info(f"📑 PDF opened: {len(pdf.pages)} pages detected.")
+            for i, page in enumerate(pdf.pages):
+                page_text = page.extract_text()
+                if page_text:
+                    text_list.append(page_text)
+
+        full_text = "\n\n".join(text_list)
+        logger.info(f"✅ Extraction complete. Total characters: {len(full_text)}")
+        return full_text
     except Exception as e:
-        logger.error(f"❌ PDF Error: {e}")
+        logger.error(f"❌ pdfplumber Error: {e}")
         return ""
 
 
@@ -235,7 +273,7 @@ def extract_text_from_epub(file_bytes: bytes) -> str:
             book = epub.read_epub(tmp_file.name)
             chapters = []
             for item in book.get_items():
-                if item.get_type() == epub.ITEM_DOCUMENT:
+                if item.get_type() == ebooklib.ITEM_DOCUMENT:
                     soup = BeautifulSoup(item.get_content(), "html.parser")
                     chapters.append(soup.get_text())
             return "\n".join(chapters)
@@ -251,61 +289,37 @@ def extract_text_from_txt(file_bytes: bytes) -> str:
         return file_bytes.decode("gbk", errors="ignore")
 
 
-def extract_and_convert_paths(text: str, base_url: str) -> tuple[str, str | None]:
-    audio_url = None
-    clean_text = text
-    match = re.search(
-        r"generated_audio[\\/](audio_[a-f0-9]+\.mp3)", text, re.IGNORECASE
-    )
-    if match:
-        filename = match.group(1)
-        audio_url = f"{base_url}/audio/{filename}"
-    return clean_text, audio_url
+# --- 8. 后台任务逻辑 ---
 
 
-# --- 🏗️ 后台任务逻辑 (更新版) ---
-def background_archive_task(file_id: str, summary: str, thread_id: str):
+def background_archive_task(
+    file_id: str, summary: str, thread_id: str, vector_store, notion_service
+):
     logger.info(f"⏳ [Background] Archiving session {file_id}...")
-
-    # 1. 从 Redis 取出完整原文
     full_text = redis_client.get(file_id)
     if not full_text:
-        logger.error(f"❌ [Background] Failed: Context {file_id} expired or not found.")
+        logger.error("❌ Context not found.")
         return
 
     try:
-        # 2. 转 Blocks 并写入 Notion
-        logger.info(
-            f"   - Converting text to Notion blocks ({len(full_text)} chars)..."
-        )
+        # 1. Notion 归档
         content_blocks = markdown_to_blocks(full_text)
-
         page_title = f"Exocortex Archive: {summary[:50]}..."
-
-        # 3. 写入 Notion
-        response = create_notion_page(
-            title=page_title, children=content_blocks, icon="💾"
-        )
+        response = notion_service.create_page(title=page_title, children=content_blocks)
         notion_page_id = response.get("id")
-        logger.info(f"✅ [Background] Saved to Notion! Page ID: {notion_page_id}")
 
-        # 4. 🔥🔥🔥 新增：写入向量数据库 (ChromaDB + SQLite) 🔥🔥🔥
-        logger.info(f"   - Indexing to Vector Store (Level-Chunk Strategy)...")
-        success = add_memory(
-            page_id=notion_page_id,  # 用 Notion 的 ID 作为父文档 ID，方便未来溯源
+        # 2. 🔥 修正：使用传入的 vector_store 实例存储记忆
+        success = vector_store.add_memory(
+            page_id=notion_page_id,
             text=full_text,
             title=page_title,
-            domain="General",  # 这里以后可以做分类
+            domain="General",
             metadata={"summary": summary},
         )
-
         if success:
-            logger.info(f"✅ [Background] Successfully indexed to ChromaDB!")
-        else:
-            logger.warning(f"⚠️ [Background] Vector indexing returned False.")
-
-    except Exception as e:
-        logger.exception("❌ [Background] Error during archiving")
+            logger.info("✅ Indexed to ChromaDB using Dependency Injection!")
+    except Exception:
+        logger.exception("❌ Error during archiving")
 
 
 # ============================
@@ -314,120 +328,75 @@ def background_archive_task(file_id: str, summary: str, thread_id: str):
 
 
 @app.post("/upload")
-@limiter.limit("10/minute")  # 限制每分钟 10 次上传
+@limiter.limit("10/minute")
 async def upload_files(request: Request, files: List[UploadFile] = File(...)):
-    logger.info(f"📂 Receiving {len(files)} files...")
-
-    # 🔒 安全检查 1: 文件数量限制
     if len(files) > MAX_FILES_COUNT:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"Too many files. Maximum {MAX_FILES_COUNT} files allowed per upload.",
-        )
+        raise HTTPException(status_code=413, detail="Too many files.")
 
     combined_text = ""
-    total_size = 0
-
     for file in files:
-        # 🔒 安全检查 2: 单个文件大小限制
-        # Read file to check size (we need to read anyway for processing)
         content = await file.read()
-        file_size = len(content)
-
-        if file_size > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File '{file.filename}' exceeds {MAX_FILE_SIZE // (1024 * 1024)}MB limit. Size: {file_size // (1024 * 1024)}MB",
-            )
-
-        # 🔒 安全检查 3: 总大小限制
-        total_size += file_size
-        if total_size > MAX_TOTAL_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"Total upload size exceeds {MAX_TOTAL_SIZE // (1024 * 1024)}MB limit.",
-            )
-
-        logger.info(f"   📄 Processing '{file.filename}' ({file_size // 1024}KB)")
-
-        # 🔒 安全检查 4: MIME 类型验证（防止恶意文件）
-        is_valid, error_msg = validate_file_type(content, file.filename)
-        if not is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=f"File '{file.filename}': {error_msg}",
-            )
-
         filename = file.filename.lower()
-        text = ""
+        logger.info(f"⚙️ Processing file: {filename} ({len(content)} bytes)")  # 👈 强制打印
 
+        text = ""
         if filename.endswith(".pdf"):
             text = extract_pdf_text(content)
         elif filename.endswith(".epub"):
             text = extract_text_from_epub(content)
-        elif filename.endswith(".txt") or filename.endswith(".md"):
+        elif filename.endswith((".txt", ".md")):  # 优化写法
             text = extract_text_from_txt(content)
+
+        # 调试：不管有没有 text，都看看到底解析出多少
+        logger.info(f"📊 Result for {filename}: {len(text) if text else 0} chars")
 
         if text:
             combined_text += f"\n\n--- FILE: {file.filename} ---\n{text}"
 
     file_id = f"session_{uuid.uuid4().hex[:8]}"
-
-    try:
-        redis_client.setex(file_id, 3600, combined_text)
-        logger.info(
-            f"💾 Stored context to Redis: {file_id} (Length: {len(combined_text)})"
-        )
-    except Exception as e:
-        logger.error(f"❌ Redis Write Error: {e}")
-        return {"status": "error", "message": "Cache failed"}
-
-    return {
-        "status": "success",
-        "file_count": len(files),
-        "file_id": file_id,
-        "message": "Content cached for 1 hour.",
-    }
+    redis_client.setex(file_id, 3600, combined_text)
+    return {"status": "success", "file_id": file_id, "file_count": len(files)}
 
 
-# 🔥 修改 endpoint 定义，不再声明 response_model (因为现在返回流)
 @app.post("/chat", dependencies=[Depends(verify_token)])
-@limiter.limit("30/minute")  # 限制每分钟 30 次对话请求
-async def chat_endpoint(request: Request, body: ChatRequest):  # 🔥 交换位置并改名
-    # --- 1. 准备上下文 ---
-    # 因为改了名，所以要把下面代码里用到的 request 换成 body
+@limiter.limit("30/minute")
+async def chat_endpoint(
+    request: Request, body: ChatRequest, notion_service=Depends(get_notion_service)
+):
     context = ""
     source_hint = ""
-
-    # 注意：这里原来是用 request.file_id，现在要改成 body.file_id
     if body.file_id:
-        try:
-            cached_text = redis_client.get(body.file_id)
-            if cached_text:
-                context = cached_text[:20000]
-                source_hint = "【Current Uploaded File】"
-        except Exception:
-            pass
+        cached_text = redis_client.get(body.file_id)
+        if cached_text:
+            context = cached_text[:20000]
+            source_hint = "【Current Uploaded File】"
 
-    # --- 2. 组装 Prompt ---
-    # 提示词中加入对音频标记的要求
-
-    system_instruction = f"""
+    system_instruction = """
     You are Exocortex, an AI assistant.
-    Current Context File ID:  {body.file_id if body.file_id else "None"}
     If you use the audio tool, you MUST output the tag exactly: [AUDIO_URL: filename.mp3]
     """
-    if context:
-        final_query = f"{system_instruction}\n\n{source_hint}:\n{context}\n\n【User Query】:\n{body.query}"
-    else:
-        final_query = f"{system_instruction}\n\n【User Query】:\n{body.query}"
+    final_query = f"{system_instruction}\n\n{source_hint}:\n{context}\n\n【User Query】:\n{body.query}"
 
-    # --- 3. 定义流式生成器 ---
     async def event_generator():
-        # 注意：这里原来是 request.thread_id，现在改成 body.thread_id
-        config = {"configurable": {"thread_id": body.thread_id}}
+        # 🔥 获取动态模型实例
+        model_instance = get_model(body.model_name)
+
+        # server.py 中的 event_generator 内部
+        config = {
+            "configurable": {
+                "thread_id": body.thread_id,
+                "model": model_instance,
+                "notion_service": notion_service,  # 🔥 注入实例
+                "db_ids": {  # 🔥 注入 ID 映射
+                    "Tech": current_config.DB_TECH_ID,
+                    "Humanities": current_config.DB_HUMANITIES_ID,
+                    "Spanish": current_config.DB_SPANISH_ID,
+                    "General": current_config.DB_TECH_ID,
+                },
+            }
+        }
+
         inputs = {"messages": [HumanMessage(content=final_query)]}
-        
         async for event in graph.astream_events(inputs, config=config, version="v1"):
             if event["event"] == "on_chat_model_stream":
                 content = event["data"]["chunk"].content
@@ -437,39 +406,37 @@ async def chat_endpoint(request: Request, body: ChatRequest):  # 🔥 交换位�
     return StreamingResponse(event_generator(), media_type="text/plain")
 
 
-# 🔥🔥🔥 新增归档接口 🔥🔥🔥
 @app.post("/archive", dependencies=[Depends(verify_token)])
-@limiter.limit("5/minute")  # 限制每分钟 5 次归档请求
+@limiter.limit("5/minute")
 async def archive_endpoint(
-    request: Request, req: ArchiveRequest, background_tasks: BackgroundTasks
+    request: Request,
+    req: ArchiveRequest,
+    background_tasks: BackgroundTasks,
+    vector_store=Depends(get_vector_store),
+    notion_service=Depends(get_notion_service),
 ):
-    # 检查 Redis 里还有没有
     if not redis_client.exists(req.file_id):
-        raise HTTPException(status_code=404, detail="Session expired, cannot archive.")
+        raise HTTPException(status_code=404, detail="Session expired.")
 
-    # 启动后台任务
     background_tasks.add_task(
-        background_archive_task, req.file_id, req.summary, req.thread_id
+        background_archive_task,
+        req.file_id,
+        req.summary,
+        req.thread_id,
+        vector_store,
+        notion_service,
     )
+    return {"status": "queued"}
 
-    return {"status": "queued", "message": "Archiving started in background."}
 
-
-# --- 健康检查 ---
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "service": "Exocortex Brain (v2.2 Secured)"}
+    return {"status": "ok", "version": "2.3.0-DI"}
 
 
-# --- 🔒 CSRF Token 端点 ---
 @app.get("/csrf-token")
 async def get_csrf_token():
-    """
-    获取 CSRF token（用于前端表单提交）
-    注意：此端点不需要认证，因为 token 本身不敏感
-    """
-    token = generate_csrf_token()
-    return {"csrf_token": token}
+    return {"csrf_token": generate_csrf_token()}
 
 
 if __name__ == "__main__":

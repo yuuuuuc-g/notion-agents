@@ -7,7 +7,7 @@ vector/splitter.py
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # --- 切分策略配置 ---
-# 1. chunk_size=500: 
+# 1. chunk_size=500:
 #    这就好比发微博。500字大约是一段完整的论述。
 #    切太小（100字）：语义破碎，AI 看不懂。
 #    切太大（1000字）：包含太多杂音，向量不精准。
@@ -20,8 +20,9 @@ _splitter = RecursiveCharacterTextSplitter(
     chunk_size=500,
     chunk_overlap=50,
     # 优先按段落切，其次按句子切，最后按字切
-    separators=["\n\n", "\n", "。", "！", "？", ".", " ", ""]
+    separators=["\n\n", "\n", "。", "！", "？", ".", " ", ""],
 )
+
 
 def split_text(text: str) -> list[str]:
     """
@@ -30,12 +31,13 @@ def split_text(text: str) -> list[str]:
     """
     if not text:
         return []
-    
+
     # 使用 LangChain 的递归切分器
     chunks = _splitter.split_text(text)
-    
+
     # 过滤掉过短的碎片（比如只有 2 个字的标题残留）
     return [c for c in chunks if len(c) > 5]
+
 
 if __name__ == "__main__":
     # 测试一下

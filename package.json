@@ -1,6 +1,16 @@
 {
-  "dependencies": {
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1"
+  "name": "notion-prism-react-root",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && cd web && npm install",
+    "dev:web": "cd web && npm run dev",
+    "dev:server": "./venv/bin/python server.py",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
+    "build:web": "cd web && npm run build",
+    "lint": "cd web && npm run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
   }
 }

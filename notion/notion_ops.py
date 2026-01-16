@@ -1,258 +1,179 @@
 """
 notion/notion_ops.py
-只负责调用 Notion API (CRUD)
-已修复: P1 级性能瓶颈 - 使用线程池并发删除 Block
-已新增: delete_page 用于事务回滚
-已适配: Exocortex Server V2.1 接口
+[Infrastructure Decoupling Refactored]
+Notion 服务的具体实现类，支持依赖注入。
 """
 
 import concurrent.futures
-from notion_client import Client
-from typing import List, Dict, Any, Optional
-from config.settings import SETTINGS
+from typing import Dict, List
 
-# 引用排版工
-from .block_builder import markdown_to_blocks, parse_rich_text, _safe_str
+from notion_client import Client
+
 from utils.logger import get_logger
+
+from .block_builder import markdown_to_blocks, parse_rich_text
+from .notion_interface import INotionService
 
 logger = get_logger(__name__)
 
-# === 配置 ===
-# 确保 SETTINGS 里有这些字段，否则会报错
-notion = Client(auth=SETTINGS.NOTION_TOKEN)
 
-DB_SPANISH_ID = SETTINGS.DB_SPANISH_ID
-DB_HUMANITIES_ID = getattr(SETTINGS, "DB_HUMANITIES_ID", None)  # 防御性获取
-DB_TECH_ID = getattr(SETTINGS, "DB_TECH_ID", None)  # 防御性获取
+class NotionService(INotionService):
+    """
+    Notion 服务类，封装了所有与 Notion API 相关的操作。
+    """
 
-# 默认使用的数据库 (如果调用时不指定，就存这里)
-DEFAULT_DB_ID = DB_TECH_ID if DB_TECH_ID else DB_SPANISH_ID
+    def __init__(self, token: str, default_db_id: str):
+        """
+        初始化时注入配置，不再直接依赖外部的 SETTINGS 对象。
+        """
+        if not token:
+            raise ValueError("❌ Notion Token 不能为空")
+        self.notion = Client(auth=token)
+        self.default_db_id = default_db_id
 
+    def _append_children_in_batches(self, page_id: str, children: List[Dict]):
+        """分批追加 Block，防止超过 100 个限制"""
+        if not children:
+            return
+        batch_size = 100
+        batches = [
+            children[i : i + batch_size] for i in range(0, len(children), batch_size)
+        ]
+        logger.info(f"📡 正在分 {len(batches)} 批次上传 {len(children)} 个 Block...")
+        for idx, batch in enumerate(batches):
+            try:
+                self.notion.blocks.children.append(block_id=page_id, children=batch)
+                logger.info(f"   - ✅ 批次 {idx + 1}/{len(batches)} 上传成功。")
+            except Exception as e:
+                logger.error(f"   - ❌ 批次 {idx + 1} 失败: {e}")
+                raise e
 
-def _append_children_in_batches(page_id: str, children: List[Dict]):
-    """分批追加 Block，防止超过 100 个限制"""
-    if not children:
-        return
-    batch_size = 100
-    batches = [
-        children[i : i + batch_size] for i in range(0, len(children), batch_size)
-    ]
-    logger.info(f"📡 Uploading {len(children)} blocks in {len(batches)} batches...")
-    for idx, batch in enumerate(batches):
+    def create_page(
+        self, title: str, children: List[Dict], icon: str = "🧠", db_id: str = None
+    ) -> Dict:
+        """
+        Exocortex 专用接口：采用“先创建、后追加”策略。
+        """
+        target_db = db_id if db_id else self.default_db_id
+        if not target_db:
+            raise ValueError("❌ 未配置有效的 Database ID！")
+
+        logger.info(f"✍️ [Notion Service] 正在创建页面: {title}")
+
         try:
-            notion.blocks.children.append(block_id=page_id, children=batch)
-            logger.info(f"   - ✅ Batch {idx + 1}/{len(batches)} uploaded.")
+            # 1. 先创建一个空页面
+            response = self.notion.pages.create(
+                parent={"database_id": target_db},
+                icon={"type": "emoji", "emoji": icon},
+                properties={"Name": {"title": [{"text": {"content": title}}]}},
+                children=[],
+            )
+            page_id = response["id"]
+            logger.info(f"✅ 空页面创建成功: {page_id}")
+
+            # 2. 批量追加内容
+            if children:
+                self._append_children_in_batches(page_id, children)
+
+            return response
+
         except Exception as e:
-            logger.error(f"   - ❌ Batch {idx + 1} failed: {e}")
+            logger.error(f"❌ 页面创建失败: {e}")
+            raise e
 
+    def delete_page(self, page_id: str) -> bool:
+        """归档（删除）指定页面"""
+        logger.info(f"🧨 [Notion Service] 正在归档页面: {page_id}")
+        try:
+            self.notion.pages.update(page_id=page_id, archived=True)
+            return True
+        except Exception as e:
+            logger.error(f"❌ 删除页面失败: {e}")
+            return False
 
-# 🔥🔥🔥 新增适配接口：供 Server.py 调用 🔥🔥🔥
-def create_notion_page(
-    title: str, children: List[Dict], icon: str = "🧠", db_id: str = None
-) -> Dict:
-    """
-    Exocortex 专用接口：采用“先创建、后追加”策略
-    这种策略能 100% 绕过 Notion 创建页面时的复杂度校验报错。
-    """
-    target_db = db_id if db_id else DEFAULT_DB_ID
-    if not target_db:
-        raise ValueError("❌ 未在 settings 中配置 Database ID！")
-
-    logger.info(f"✍️ [Notion Ops] 正在创建页面: {title}")
-
-    try:
-        # 第一步：先创建一个空页面 (成功率最高)
-        # 不在此时传入 children，防止触发 body.children 校验错误
-        response = notion.pages.create(
-            parent={"database_id": target_db},
-            icon={"type": "emoji", "emoji": icon},
-            properties={
-                "Name": {"title": [{"text": {"content": title}}]}
-            },
-            children=[] 
-        )
-        page_id = response["id"]
-        logger.info(f"✅ 空页面创建成功: {page_id}")
-
-        # 第二步：使用您原有的 _append_children_in_batches 逻辑写入全部内容
-        # 这种方式对于嵌套和复杂结构的兼容性远高于直接创建
-        if children:
-            _append_children_in_batches(page_id, children)
-
-        return response
-
-    except Exception as e:
-        logger.error(f"❌ 页面创建失败: {e}")
-        raise e
-
-
-# --- 以下保留你原有的函数，供其他模块使用 ---
-
-
-def create_general_note(
-    data: Dict, target_db_id: str, original_url: str = None
-) -> Optional[str]:
-    """旧版接口：保留兼容性"""
-    title = _safe_str(data.get("title", "Untitled"))
-    summary = data.get("summary")
-    markdown_body = data.get("markdown_body", "")
-
-    # ... (原有逻辑保持不变，或者你可以让它直接调用 create_notion_page) ...
-    # 为了保险，先保留你原来的代码不动
-
-    children = []
-    if summary:
-        children.append(
-            {
-                "object": "block",
-                "type": "callout",
-                "callout": {
-                    "rich_text": parse_rich_text(summary),
-                    "icon": {"emoji": "💡"},
-                    "color": "gray_background",
-                },
-            }
-        )
-
-    if markdown_body:
-        children.extend(markdown_to_blocks(markdown_body))
-
-    # 直接复用新接口，减少重复代码！
-    try:
-        res = create_notion_page(title, children, icon="📝", db_id=target_db_id)
-        return res["id"]
-    except Exception:
-        return None
-
-
-def append_to_page(page_id: str, data: Dict, restore_mode: bool = False) -> bool:
-    """向现有页面追加内容 (保持不变)"""
-    logger.info(f"➕ [Notion Ops] Appending to {page_id}")
-    children = []
-    summary = data.get("summary")
-    title = _safe_str(data.get("title", "Update"))
-
-    if restore_mode:
-        if summary:
-            children.append(
-                {
-                    "object": "block",
-                    "type": "callout",
-                    "callout": {
-                        "rich_text": parse_rich_text(summary),
-                        "icon": {"emoji": "💡"},
-                        "color": "gray_background",
-                    },
-                }
-            )
-    else:
-        children.extend(
-            [
-                {"object": "block", "type": "divider", "divider": {}},
-                {
-                    "object": "block",
-                    "type": "heading_2",
-                    "heading_2": {
-                        "rich_text": [{"text": {"content": f"Update: {title}"}}],
-                        "color": "blue_background",
-                    },
-                },
-            ]
-        )
-
-    if data.get("markdown_body"):
-        children.extend(markdown_to_blocks(data["markdown_body"]))
-    else:
-        raw = str(data.get("blocks", ""))
-        children.append(
-            {
-                "object": "block",
-                "type": "paragraph",
-                "paragraph": {"rich_text": [{"text": {"content": raw}}]},
-            }
-        )
-
-    try:
-        _append_children_in_batches(page_id, children)
-        return True
-    except Exception as e:
-        logger.error(f"❌ Append Failed: {e}")
-        return False
-
-
-def _delete_block_worker(block_id: str):
-    """辅助函数：供线程池调用"""
-    try:
-        notion.blocks.delete(block_id=block_id)
-    except Exception as e:
-        logger.warning(f"   ⚠️ Delete block {block_id} failed: {e}")
-
-
-def overwrite_page_content(page_id: str, draft_data: Dict) -> bool:
-    """覆盖页面内容 (保持不变)"""
-    logger.info(f"♻️ [Notion Ops] Overwriting page {page_id}...")
-    try:
-        # 1. 获取所有子 Block ID
-        all_block_ids = []
-        has_more = True
-        start_cursor = None
-
-        while has_more:
-            response = notion.blocks.children.list(
-                block_id=page_id, start_cursor=start_cursor
-            )
+    def get_page_text(self, page_id: str) -> str:
+        """提取页面文本内容内容"""
+        logger.info(f"📖 [Notion Service] 正在读取页面: {page_id}")
+        try:
+            response = self.notion.blocks.children.list(block_id=page_id)
             blocks = response.get("results", [])
+            lines = []
             for b in blocks:
-                all_block_ids.append(b["id"])
-            has_more = response.get("has_more")
-            start_cursor = response.get("next_cursor")
+                b_type = b.get("type")
+                if "rich_text" in b.get(b_type, {}):
+                    text_objs = b[b_type]["rich_text"]
+                    plain = "".join([t.get("plain_text", "") for t in text_objs])
+                    if plain:
+                        lines.append(plain)
+                elif b_type == "code":
+                    text_objs = b["code"].get("rich_text", [])
+                    code = "".join([t.get("plain_text", "") for t in text_objs])
+                    lines.append(f"```\n{code}\n```")
+            return "\n\n".join(lines)
+        except Exception as e:
+            logger.error(f"❌ 读取失败: {e}")
+            return ""
 
-        # 2. 并发删除
-        if all_block_ids:
-            logger.info(f"   - Deleting {len(all_block_ids)} blocks (Parallel)...")
-            with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-                executor.map(_delete_block_worker, all_block_ids)
+    def _delete_block_worker(self, block_id: str):
+        """线程池辅助函数"""
+        try:
+            self.notion.blocks.delete(block_id=block_id)
+        except Exception as e:
+            logger.warning(f"   ⚠️ 删除 Block {block_id} 失败: {e}")
 
-        logger.info("   - 🗑️ Old content cleared.")
+    def overwrite_page_content(
+        self, page_id: str, markdown_body: str, summary: str = None
+    ) -> bool:
+        """清空并覆盖页面内容"""
+        logger.info(f"♻️ [Notion Service] 正在重写页面内容: {page_id}...")
+        try:
+            # 1. 获取并并发删除所有 Block
+            all_block_ids = []
+            has_more, start_cursor = True, None
+            while has_more:
+                res = self.notion.blocks.children.list(
+                    block_id=page_id, start_cursor=start_cursor
+                )
+                all_block_ids.extend([b["id"] for b in res.get("results", [])])
+                has_more, start_cursor = res.get("has_more"), res.get("next_cursor")
 
-        # 3. 写入新内容
-        return append_to_page(page_id, draft_data, restore_mode=True)
+            if all_block_ids:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    executor.map(self._delete_block_worker, all_block_ids)
 
-    except Exception as e:
-        logger.error(f"❌ Overwrite Failed: {e}")
-        return False
+            # 2. 构造新内容
+            new_children = []
+            if summary:
+                new_children.append(
+                    {
+                        "object": "block",
+                        "type": "callout",
+                        "callout": {
+                            "rich_text": parse_rich_text(summary),
+                            "icon": {"emoji": "💡"},
+                            "color": "gray_background",
+                        },
+                    }
+                )
+            new_children.extend(markdown_to_blocks(markdown_body))
+
+            # 3. 写入新内容
+            self._append_children_in_batches(page_id, new_children)
+            return True
+        except Exception as e:
+            logger.error(f"❌ 覆盖内容失败: {e}")
+            return False
 
 
-def delete_page(page_id: str) -> bool:
-    """归档页面 (保持不变)"""
-    logger.info(f"🧨 [Notion Ops] Deleting (Archiving) page {page_id}...")
-    try:
-        notion.pages.update(page_id=page_id, archived=True)
-        return True
-    except Exception as e:
-        logger.error(f"❌ Delete Page Failed: {e}")
-        return False
+# --- 🚀 为了保持 server.py 的短期兼容性，我们可以暂时保留原变量名的工厂包装 ---
+# 但在下一步中，我们将通过 server.py 的 get_notion_service 直接管理
+def create_notion_page(title: str, children: List[Dict], icon: str = "🧠"):
+    """
+    临时兼容函数：在 server.py 还没完全改好 Depends 之前使用。
+    """
+    from config.settings import SETTINGS
 
-
-def get_page_text(page_id: str) -> str:
-    # 保持不变
-    logger.info(f"📖 [Notion Ops] Reading {page_id}...")
-    try:
-        response = notion.blocks.children.list(block_id=page_id)
-        blocks = response.get("results", [])
-        lines = []
-        for b in blocks:
-            b_type = b.get("type")
-            if "rich_text" in b.get(b_type, {}):
-                text_objs = b[b_type]["rich_text"]
-                plain = "".join([t.get("plain_text", "") for t in text_objs])
-                if plain:
-                    lines.append(plain)
-            elif b_type == "code":
-                text_objs = b["code"].get("rich_text", [])
-                code = "".join([t.get("plain_text", "") for t in text_objs])
-                lines.append(f"```\n{code}\n```")
-        return "\n\n".join(lines)
-    except Exception as e:
-        logger.error(f"❌ Read Failed: {e}")
-        return ""
+    service = NotionService(
+        SETTINGS.NOTION_TOKEN, SETTINGS.DB_TECH_ID or SETTINGS.DB_SPANISH_ID
+    )
+    return service.create_page(title, children, icon)

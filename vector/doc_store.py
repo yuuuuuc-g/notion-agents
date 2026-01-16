@@ -4,11 +4,13 @@ vector/doc_store.py
 父文档存储仓库 (基于 SQLite)
 已修复: 线程锁死问题 (Database Locked)
 """
-import sqlite3
-import os
 import json
+import os
+import sqlite3
 from typing import Optional
+
 from config.settings import SETTINGS
+
 
 class DocStore:
     def __init__(self, db_name="doc_store.db"):
@@ -30,27 +32,32 @@ class DocStore:
             # 核心修复 3: 开启 WAL 模式 (Write-Ahead Logging)
             # 这允许同时进行读写操作，大幅减少锁冲突
             conn.execute("PRAGMA journal_mode=WAL;")
-            
-            conn.execute('''
+
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS documents (
                     doc_id TEXT PRIMARY KEY,
                     content TEXT,
                     metadata TEXT
                 )
-            ''')
+            """
+            )
             conn.commit()
 
     def add_document(self, doc_id: str, content: str, metadata: dict = None):
         """存入父文档 (Upsert)"""
         meta_json = json.dumps(metadata or {}, ensure_ascii=False)
-        
+
         try:
             with self._get_conn() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
+                cursor.execute(
+                    """
                     REPLACE INTO documents (doc_id, content, metadata)
                     VALUES (?, ?, ?)
-                ''', (doc_id, content, meta_json))
+                """,
+                    (doc_id, content, meta_json),
+                )
                 conn.commit()
                 # 成功后打印日志
                 print(f"📚 [DocStore] Saved Parent Document: {doc_id[:8]}...")
@@ -63,7 +70,9 @@ class DocStore:
         try:
             with self._get_conn() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT content FROM documents WHERE doc_id = ?', (doc_id,))
+                cursor.execute(
+                    "SELECT content FROM documents WHERE doc_id = ?", (doc_id,)
+                )
                 row = cursor.fetchone()
                 if row:
                     return row[0]
@@ -76,17 +85,21 @@ class DocStore:
         try:
             with self._get_conn() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT content, metadata FROM documents WHERE doc_id = ?', (doc_id,))
+                cursor.execute(
+                    "SELECT content, metadata FROM documents WHERE doc_id = ?",
+                    (doc_id,),
+                )
                 row = cursor.fetchone()
-                
+
                 if row:
                     return {
                         "content": row[0],
-                        "metadata": json.loads(row[1]) if row[1] else {}
+                        "metadata": json.loads(row[1]) if row[1] else {},
                     }
         except Exception as e:
             print(f"❌ [DocStore] Read Meta Error: {e}")
         return None
+
 
 # 单例模式
 DOC_STORE = DocStore()

@@ -16,6 +16,7 @@ env/
 *.egg
 pip-log.txt
 pip-delete-this-directory.txt
+node_modules/
 
 # 🍏 Mac 系统垃圾
 .DS_Store
