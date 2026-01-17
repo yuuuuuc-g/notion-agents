@@ -5,7 +5,7 @@ Notion 服务的具体实现类，支持依赖注入。
 """
 
 import concurrent.futures
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from notion_client import Client
 
@@ -23,11 +23,9 @@ class NotionService(INotionService):
     """
 
     def __init__(self, token: str, default_db_id: str):
-        """
-        初始化时注入配置，不再直接依赖外部的 SETTINGS 对象。
-        """
         if not token:
             raise ValueError("❌ Notion Token 不能为空")
+        # 确保是从 notion_client 导入的 Client
         self.notion = Client(auth=token)
         self.default_db_id = default_db_id
 
@@ -47,6 +45,71 @@ class NotionService(INotionService):
             except Exception as e:
                 logger.error(f"   - ❌ 批次 {idx + 1} 失败: {e}")
                 raise e
+
+    def fetch_database_content(self, db_id: Optional[str] = None) -> List[Dict]:
+        import os  # 确保导入 os
+
+        import requests
+
+        target_db = db_id if db_id else self.default_db_id
+        clean_db_id = target_db.replace("-", "")
+
+        # 核心修正：直接从环境变量获取 Token，不再去 self.notion 里面猜属性名
+        token = os.getenv("NOTION_TOKEN")
+
+        if not token:
+            logger.error("❌ 未能获取到 NOTION_TOKEN，请检查 .env 文件")
+            raise Exception("Missing NOTION_TOKEN")
+
+        logger.info(f"🔍 [Standard Sync] 正在拉取数据库内容: {clean_db_id}")
+
+        url = f"https://api.notion.com/v1/databases/{clean_db_id}/query"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Notion-Version": "2022-06-28",
+            "Content-Type": "application/json",
+        }
+
+        pages_data = []
+
+        try:
+            # 使用 requests 发起请求
+            response = requests.post(url, headers=headers, json={})
+
+            if response.status_code != 200:
+                logger.error(
+                    f"❌ Notion API 报错 (Status {response.status_code}): {response.text}"
+                )
+                return []
+
+            results = response.json().get("results", [])
+
+            for page in results:
+                page_id = page["id"]
+                properties = page.get("properties", {})
+
+                # 寻找标题属性
+                title = "Untitled"
+                for prop_name, prop in properties.items():
+                    if isinstance(prop, dict) and prop.get("type") == "title":
+                        title_objs = prop.get("title", [])
+                        if title_objs:
+                            title = title_objs[0].get("plain_text", "Untitled")
+                        break
+
+                # 获取正文文本
+                content = self.get_page_text(page_id)
+                if content.strip():
+                    pages_data.append(
+                        {"id": page_id, "title": title, "content": content}
+                    )
+                    logger.info(f"   - ✅ 抓取成功: {title}")
+
+            return pages_data
+
+        except Exception as e:
+            logger.error(f"❌ 数据库拉取通讯失败: {e}")
+            raise e
 
     def create_page(
         self, title: str, children: List[Dict], icon: str = "🧠", db_id: str = None
@@ -92,15 +155,17 @@ class NotionService(INotionService):
             return False
 
     def get_page_text(self, page_id: str) -> str:
-        """提取页面文本内容内容"""
+        """提取页面文本内容"""
         logger.info(f"📖 [Notion Service] 正在读取页面: {page_id}")
         try:
+            # 考虑分页处理内容，此处为简化版，拉取首屏内容
             response = self.notion.blocks.children.list(block_id=page_id)
             blocks = response.get("results", [])
             lines = []
             for b in blocks:
                 b_type = b.get("type")
-                if "rich_text" in b.get(b_type, {}):
+                # 提取富文本内容
+                if b_type and "rich_text" in b.get(b_type, {}):
                     text_objs = b[b_type]["rich_text"]
                     plain = "".join([t.get("plain_text", "") for t in text_objs])
                     if plain:
@@ -165,8 +230,6 @@ class NotionService(INotionService):
             return False
 
 
-# --- 🚀 为了保持 server.py 的短期兼容性，我们可以暂时保留原变量名的工厂包装 ---
-# 但在下一步中，我们将通过 server.py 的 get_notion_service 直接管理
 def create_notion_page(title: str, children: List[Dict], icon: str = "🧠"):
     """
     临时兼容函数：在 server.py 还没完全改好 Depends 之前使用。

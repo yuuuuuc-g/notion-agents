@@ -1,34 +1,28 @@
 # 1. 基础镜像
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# 2. 设置工作目录
 WORKDIR /app
 
-# 🔥 关键修改：换源！
-# 把默认的 deb.debian.org 替换为 mirrors.aliyun.com
-# 这样 apt-get install ffmpeg 就会飞快
-RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources
-
-# 3. 安装系统依赖 (ffmpeg, lsof)
-# 加上 --fix-missing 防止偶尔的网络抖动
-RUN apt-get update && apt-get install -y --fix-missing \
+# 2. 还原：安装系统依赖
+RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    libmagic1 \
     lsof \
     && rm -rf /var/lib/apt/lists/*
 
-# 4. 优化缓存：先只复制依赖清单，安装依赖
+# 4. 还原：复制清单并使用阿里云源安装
 COPY requirements.txt .
-# 这里的 pip 最好也指定一下国内源，双重保险
-RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple
 
-# 5. 复制剩余的所有代码文件
+# 复制必要代码
 COPY . .
 
-# 6. 赋予启动脚本执行权限
+# 权限处理
 RUN chmod +x start.sh
 
-# 7. 暴露端口
+# 暴露端口 (保留 8000 用于 API，8501 备用)
 EXPOSE 8000 8501
 
-# 8. 启动命令
+# 启动 (沿用你之前的脚本)
 CMD ["./start.sh"]

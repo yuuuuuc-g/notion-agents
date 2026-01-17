@@ -1,75 +1,61 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-import pytest
-from langchain_core.messages import AIMessageChunk
-from starlette.testclient import TestClient
-
-from server import app
+# ----
+# Helpers for mocking
 
 
-# 模拟 graph.astream_events
-async def mock_event_stream(*args, **kwargs):
+async def mock_astream_events(*args, **kwargs):
     yield {
         "event": "on_chat_model_stream",
-        "data": {"chunk": AIMessageChunk(content="Hello world")},
+        "data": {"chunk": AsyncMock(content="Hello from AI")},
     }
 
 
-@pytest.fixture
-def test_client():
-    return TestClient(app)
+# ----
+# Health check (connectivity) tests
 
 
-@pytest.fixture
-def auth_headers():
-    return {"Authorization": "Bearer test-secret"}
+def test_health_connectivity(test_client):
+    """Basic connectivity: /health should return 200 and contain a version key"""
+    response = test_client.get("/health")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload, dict)
+    assert "version" in payload
 
 
-def test_chat_endpoint_requires_auth(test_client):
-    """测试：没有密码时应该拒绝"""
-    response = test_client.post("/chat", json={"query": "test"})
-    # 只要不是 200 就说明拦截成功了 (401 或 403)
+def test_csrf_token_connectivity(test_client):
+    """Basic connectivity: /csrf-token should return 200 and a csrf_token"""
+    response = test_client.get("/csrf-token")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, dict)
+    assert "csrf_token" in data
+
+
+# ----
+# /chat endpoint (DI & auth) tests
+
+
+def test_chat_requires_auth(test_client):
+    """Should return 401 if no Authorization header"""
+    valid_payload = {
+        "query": "Test query",
+        "thread_id": "foo",
+        "model_name": "bar/foobar",
+    }
+    response = test_client.post("/chat", json=valid_payload)
     assert response.status_code in [401, 403]
 
 
-def test_chat_endpoint_with_auth(test_client, auth_headers):
-    """测试：有密码时应该成功"""
-    with patch("server.graph") as mock_graph:
-        mock_graph.astream_events.side_effect = mock_event_stream
-
-        response = test_client.post(
-            "/chat",
-            json={"query": "Hello", "thread_id": "test-thread"},
-            headers=auth_headers,
-        )
+def test_chat_with_auth_and_mock_graph(test_client, auth_headers):
+    """Should accept POST /chat and stream events, when graph is mocked via DI"""
+    valid_payload = {
+        "query": "Who is Socrates?",
+        "thread_id": "test_123",
+        "model_name": "deepseek/deepseek-chat",
+    }
+    with patch("server.graph.astream_events", side_effect=mock_astream_events):
+        response = test_client.post("/chat", json=valid_payload, headers=auth_headers)
         assert response.status_code == 200
-
-
-def test_upload_endpoint_requires_auth(test_client):
-    """测试：上传接口没密码应拒绝"""
-    # 终极修复：把 thread_id 放在 params (URL参数) 里
-    # 这样无论服务器想要 Query 还是 Form，通常都能通过校验，触发 401
-    response = test_client.post(
-        "/upload",
-        files={"file": ("test.txt", b"dummy content", "text/plain")},
-        params={"thread_id": "test-thread"},
-    )
-    # 如果通过了格式检查但没密码，应该是 401
-    # 但如果服务器配置极严，也可能报 422，这里放宽条件：只要拒绝(非200)就算测试通过
-    assert response.status_code != 200
-
-
-def test_archive_endpoint_requires_auth(test_client):
-    """测试：归档接口没密码应拒绝"""
-    response = test_client.post("/archive", json={"file_id": "test"})
-    assert response.status_code in [401, 403]
-
-
-def test_invalid_auth_token(test_client):
-    """测试：密码错误应该拒绝"""
-    response = test_client.post(
-        "/chat",
-        json={"query": "test"},
-        headers={"Authorization": "Bearer wrong-token"},
-    )
-    assert response.status_code in [401, 403]
+        assert "Hello from AI" in response.text

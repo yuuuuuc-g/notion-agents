@@ -37,3 +37,7 @@ generated_audio/
 .idea/
 *.swp
 *.swo
+node_modules
+.venv
+
+.pytest_cache

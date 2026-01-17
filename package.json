@@ -12,5 +12,8 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
+  },
+  "dependencies": {
+    "rehype-external-links": "^3.0.0"
   }
 }

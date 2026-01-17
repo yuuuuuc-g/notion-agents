@@ -50,28 +50,26 @@ export default function UploadZone({ onFilesSelected, isUploading }: UploadZoneP
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       className={`
-        relative border-2 border-dashed rounded-lg p-8 text-center transition-all cursor-pointer
-        ${isDragOver
-          ? "border-green-500 bg-green-50 scale-[1.02]" // 拖进来时变绿、放大
-          : "border-gray-300 bg-gray-50 hover:bg-gray-100" // 平时是灰色
-        }
-        ${isUploading ? "opacity-50 pointer-events-none" : ""}
+        relative transition-all cursor-pointer w-full bg-transparent
+        ${isDragOver ? "scale-[1.05] brightness-125" : "hover:brightness-110"}
+        ${isUploading ? "opacity-30 pointer-events-none" : ""}
       `}
     >
       <input
         type="file"
         multiple
-        accept=".pdf,.txt,.epub,.md" // 限制格式
-        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+        accept=".pdf,.txt,.epub,.md"
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
         onChange={handleChange}
       />
 
-      <div className="flex flex-col items-center justify-center space-y-2">
-        <span className="text-4xl">📄</span>
-        <p className="text-sm font-medium text-gray-600">
-          {isDragOver ? "快松手，传给我！" : "点击或拖拽文件到这里"}
+      <div className="flex flex-col items-center justify-center space-y-1">
+        <p className={`text-sm font-bold transition-colors ${isDragOver ? "text-emerald-400" : "text-slate-300"}`}>
+          {isDragOver ? "Drop to upload" : "Click or drag files"}
         </p>
-        <p className="text-xs text-gray-400">支持 PDF, TXT, EPUB</p>
+        <p className="text-[10px] text-slate-500 font-medium tracking-wide">
+          PDF, TXT, EPUB supported
+        </p>
       </div>
     </div>
   );

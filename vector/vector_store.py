@@ -37,6 +37,23 @@ class LevelChunkVectorStore(IVectorStore):
             embedding_function=self.embedding_func,
         )
 
+    def page_exists(self, page_id: str) -> bool:
+        """
+        🔍 检查页面是否已存在于向量库中
+        通过检查父文档是否存在以及是否已有对应的 chunk 向量
+        """
+        try:
+            # 检查父文档是否存在于 DOC_STORE
+            if DOC_STORE.get_document(page_id):
+                # 检查是否有对应的 chunk（至少第一个 chunk）
+                chunk_id = f"{page_id}_chunk_0"
+                results = self.collection.get(ids=[chunk_id])
+                return len(results.get("ids", [])) > 0
+            return False
+        except Exception as e:
+            logger.warning(f"⚠️ [VectorStore] Check page existence error: {e}")
+            return False
+
     def add_memory(
         self,
         page_id: str,
@@ -45,9 +62,13 @@ class LevelChunkVectorStore(IVectorStore):
         title: str = None,
         domain: str = None,
         metadata: Optional[Dict[str, Any]] = None,
+        skip_if_exists: bool = False,
     ) -> bool:
         """
         [写入流程] 1. 存父文档 -> 2. 切分 -> 3. 存子向量
+
+        Args:
+            skip_if_exists: 如果为 True，且页面已存在，则跳过写入
         """
         if not text or len(text.strip()) < 10:
             return False
@@ -56,7 +77,12 @@ class LevelChunkVectorStore(IVectorStore):
         final_title = title or final_metadata.get("title") or "Untitled"
         final_domain = domain or final_metadata.get("domain") or "General"
 
-        # 1. 存父文档 (The Parent)
+        # 🔍 去重检查：如果 skip_if_exists=True 且页面已存在，则跳过
+        if skip_if_exists and self.page_exists(page_id):
+            logger.info(f"⏭️ [Store] 页面已存在，跳过: {final_title} (ID: {page_id})")
+            return False
+
+        # 1. 存父文档 (The Parent) - 使用 REPLACE 确保更新
         logger.info(f"📚 [Store] Saving Parent Document: {final_title} (ID: {page_id})")
         DOC_STORE.add_document(
             doc_id=page_id,
@@ -77,6 +103,9 @@ class LevelChunkVectorStore(IVectorStore):
         # 3. 构造子文档数据
         ids, documents, metadatas = [], [], []
         for i, chunk_text in enumerate(chunks):
+            import time
+
+            time.sleep(2.0)
             chunk_id = f"{page_id}_chunk_{i}"
             chunk_meta = {
                 "parent_id": page_id,
@@ -93,11 +122,24 @@ class LevelChunkVectorStore(IVectorStore):
             metadatas.append(chunk_meta)
 
         try:
+            # 🔄 去重处理：先删除已存在的 chunk（如果有更新）
+            existing_chunks = self.collection.get(
+                ids=[chunk_id for chunk_id in ids],
+                include=["documents"],  # 只检查 ID，不加载完整数据
+            )
+            if existing_chunks.get("ids"):
+                logger.info(
+                    f"   🔄 删除 {len(existing_chunks['ids'])} 个已存在的 chunk，准备更新..."
+                )
+                self.collection.delete(ids=existing_chunks["ids"])
+
             # 使用实例内部的 collection 写入
             self.collection.add(ids=ids, documents=documents, metadatas=metadatas)
             logger.info(f"   ✅ Indexed {len(chunks)} chunks in ChromaDB.")
             return True
         except Exception as e:
+            if "403" in str(e):
+                time.sleep(10.0)
             logger.error(f"❌ Failed to index vectors: {e}")
             return False
 

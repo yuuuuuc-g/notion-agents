@@ -31,7 +31,7 @@ class Settings:
     # --- 4. 知识库 (Notion) ---
     NOTION_TOKEN: str = os.getenv("NOTION_TOKEN")
 
-    # 核心修复：这里必须和你 .env 里的名字一模一样！
+    # 这里必须和你 .env 里的名字一模一样！
     _MAIN_DB_ID = os.getenv("NOTION_DATABASE_ID")
 
     # 1. 西语/主数据库 (如果没有专门设西班牙语库，就用主库)
@@ -54,3 +54,11 @@ SETTINGS = Settings()
 # 启动检查
 if not SETTINGS.NOTION_TOKEN or not SETTINGS._MAIN_DB_ID:
     print("⚠️  Warning: Notion configuration missing in .env")
+
+# 🔒 强制检查 API_SECRET - 安全要求
+if not SETTINGS.API_SECRET:
+    raise ValueError(
+        "❌ API_SECRET must be set in environment variables (.env file). "
+        "This is a required security configuration. "
+        "Please set API_SECRET in your .env file before starting the server."
+    )

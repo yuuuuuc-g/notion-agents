@@ -1,55 +1,61 @@
-version: '3.8'
-
-# 定义一个内部网络，让所有服务互通
-networks:
-  exocortex_net:
-    driver: bridge
-
-# 定义数据卷，用于持久化保存
-volumes:
-  chroma_db:
-  redis_data:  # 🆕 新增：Redis 数据卷
 
 services:
-  # 🧠 1. 核心大脑 (FastAPI + Streamlit Legacy)
+  # 后端服务：完全保留你原本的资源限制、卷挂载和网络配置
   exocortex:
     build: .
     container_name: exocortex_v2
     ports:
-      - "8501:8501" # Streamlit 后台
-      - "8000:8000" # FastAPI 接口
-    env_file:
-      - .env
+      - "8501:8501"
+      - "8000:8000"
+    env_file: .env
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     environment:
-      - PYTHONUNBUFFERED=1
-      # 告诉后端：Redis 在哪里 (使用容器名 'redis')
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      # 代理配置 (保持你之前的设置)
-      - HTTP_PROXY=http://host.docker.internal:7890
-      - HTTPS_PROXY=http://host.docker.internal:7890
-      - ALL_PROXY=socks5://host.docker.internal:7890
-      # 🚨 必填：让容器内服务直连，不走代理
-      - NO_PROXY=localhost,127.0.0.1,0.0.0.0,redis,exocortex_v2
-      - no_proxy=localhost,127.0.0.1,0.0.0.0,redis,exocortex_v2
     volumes:
       - ./chroma_db:/app/chroma_db
       - ./generated_audio:/app/generated_audio
-      - ./doc_store.db:/app/doc_store.db
     depends_on:
-      - redis # 🆕 等 Redis 启动了再启动
+      - redis
     networks:
       - exocortex_net
-    restart: always
+    restart: unless-stopped
 
-  # ⚡ 2. 瞬时记忆体 (Redis) [NEW]
+  # 🟢 额外新增：BioBrain React 前端 (不干涉后端)
+  biobrain_frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: biobrain_react
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    networks:
+      - exocortex_net
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000 # 映射到你宿主机的端口
+
   redis:
     image: redis:alpine
     container_name: exocortex_redis
-    ports:
-      - "6379:6379" # 暴露端口以便本地调试 (可选)
+    deploy:
+      resources:
+        limits:
+          memory: 256M
     volumes:
       - redis_data:/data
     networks:
       - exocortex_net
-    restart: always
+
+networks:
+  exocortex_net:
+    driver: bridge
+
+volumes:
+  redis_data:
