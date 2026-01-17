@@ -6,6 +6,7 @@ Backend API 入口 (FastAPI)
 import asyncio
 import os
 import uuid
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import List, Optional
 
@@ -98,9 +99,40 @@ def get_notion_service(config=Depends(get_config)):
     )
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI 现代生命周期管理：
+    代替旧的 @app.on_event("startup")
+    """
+    # --- 启动逻辑 ---
+    config = get_config()
+    # 挂载同步任务
+    sync_task = asyncio.create_task(
+        auto_sync_scheduler(
+            db_id=config.DB_SPANISH_ID,
+            notion_token=config.NOTION_TOKEN,
+            get_vector_store_func=get_vector_store,
+            get_config_func=get_config,
+        )
+    )
+    logger.info("🚀 [System] 增量同步任务已挂载 (Lifespan Mode)")
+
+    yield  # 🟢 应用运行期间，代码停留在此处
+
+    # --- 关闭逻辑 ---
+    sync_task.cancel()
+    try:
+        await sync_task  # 等待任务彻底取消
+    except asyncio.CancelledError:
+        pass
+    logger.info("🛑 [System] 正在关闭同步任务...")
+
+
 # --- 初始化 APP ---
 app = FastAPI(
     title="Exocortex API",
+    lifespan=lifespan,
     description="Backend service for Notion-Prism-React Agent",
     version="2.4.0",
 )
@@ -335,22 +367,6 @@ async def sync_notion(
         domain="Spanish",
     )
     return result
-
-
-# --- 启动事件 ---
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时注册后台任务"""
-    config = get_config()
-    asyncio.create_task(
-        auto_sync_scheduler(
-            db_id=config.DB_SPANISH_ID,
-            notion_token=config.NOTION_TOKEN,
-            get_vector_store_func=get_vector_store,
-            get_config_func=get_config,
-        )
-    )
-    logger.info("🚀 [System] 增量同步任务已挂载，启动30秒后开始第一次同步，之后每24小时自动同步。")
 
 
 @app.get("/health")

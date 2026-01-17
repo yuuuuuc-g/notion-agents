@@ -47,3 +47,6 @@ yarn-error.log*
 *.swp
 *.swo
 *~
+# 忽略 Qdrant 的数据目录
+qdrant_storage/
+*.sqlite3

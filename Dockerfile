@@ -21,8 +21,8 @@ COPY . .
 # 权限处理
 RUN chmod +x start.sh
 
-# 暴露端口 (保留 8000 用于 API，8501 备用)
-EXPOSE 8000 8501
+# 暴露端口
+EXPOSE 8000
 
 # 启动 (沿用你之前的脚本)
 CMD ["./start.sh"]

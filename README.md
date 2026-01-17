@@ -103,7 +103,7 @@ docker compose up -d --build
 cd web && npm run dev
 
 # 查看后台日志
-docker compose logs -f --tail=50 exocortex
+docker compose logs -f exocortex
 
 ```
 

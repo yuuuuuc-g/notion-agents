@@ -2,12 +2,13 @@
 vector/doc_store.py
 [Level-Chunk Upgrade]
 父文档存储仓库 (基于 SQLite)
-已修复: 线程锁死问题 (Database Locked)
+已修复: 线程锁死、增量同步接口缺失、同步时间更新接口缺失
 """
 import json
 import os
 import sqlite3
-from typing import Optional
+import time
+from typing import Any, Dict, List, Optional
 
 from config.settings import SETTINGS
 
@@ -18,52 +19,100 @@ class DocStore:
         self._init_db()
 
     def _get_conn(self):
-        """
-        获取数据库连接的统一入口
-        核心修复 1: timeout=30 (等待 30 秒而不是立刻报错)
-        核心修复 2: check_same_thread=False (允许在多线程环境使用连接，尽管我们每次都新建)
-        """
+        """获取数据库连接，开启超时等待和多线程支持"""
         return sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
 
     def _init_db(self):
-        """初始化 SQLite 表结构 + 开启 WAL 模式"""
-        # 使用 with 语法自动管理关闭，防止资源泄漏
+        """初始化表结构：增加同步状态支持"""
         with self._get_conn() as conn:
-            # 核心修复 3: 开启 WAL 模式 (Write-Ahead Logging)
-            # 这允许同时进行读写操作，大幅减少锁冲突
             conn.execute("PRAGMA journal_mode=WAL;")
-
+            # 1. 核心表：存储内容与元数据
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS documents (
                     doc_id TEXT PRIMARY KEY,
                     content TEXT,
-                    metadata TEXT
+                    metadata TEXT,
+                    source TEXT,
+                    last_synced_at REAL
                 )
-            """
+                """
+            )
+            # 2. 系统信息表：存储最后同步时间等全局状态
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS system_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+                """
             )
             conn.commit()
 
-    def add_document(self, doc_id: str, content: str, metadata: dict = None):
-        """存入父文档 (Upsert)"""
-        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
-
+    def get_synced_page_ids(self, source: str = "notion") -> List[str]:
+        """🔍 获取所有已同步的页面 ID (用于增量同步判定)"""
         try:
             with self._get_conn() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    """
-                    REPLACE INTO documents (doc_id, content, metadata)
-                    VALUES (?, ?, ?)
-                """,
-                    (doc_id, content, meta_json),
+                    "SELECT doc_id FROM documents WHERE source = ?", (source,)
+                )
+                rows = cursor.fetchall()
+                return [row[0] for row in rows]
+        except Exception as e:
+            print(f"❌ [DocStore] Get Synced IDs Error: {e}")
+            return []
+
+    def mark_page_synced(self, doc_id: str, source: str = "notion"):
+        """✅ 标记页面为已同步状态"""
+        try:
+            with self._get_conn() as conn:
+                conn.execute(
+                    "UPDATE documents SET source = ?, last_synced_at = ? WHERE doc_id = ?",
+                    (source, time.time(), doc_id),
                 )
                 conn.commit()
-                # 成功后打印日志
+                print(f"✅ [DocStore] Marked synced: {doc_id[:8]}")
+        except Exception as e:
+            print(f"❌ [DocStore] Mark Synced Error: {e}")
+
+    def update_last_full_sync_time(self, key: str = "last_notion_sync"):
+        """🕒 记录最后一次全量同步完成的时间点"""
+        try:
+            with self._get_conn() as conn:
+                conn.execute(
+                    "INSERT INTO system_config (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    (key, str(time.time())),
+                )
+                conn.commit()
+                print("🕒 [DocStore] Global sync time updated.")
+        except Exception as e:
+            print(f"❌ [DocStore] Update Sync Time Error: {e}")
+
+    def add_document(
+        self, doc_id: str, content: str, metadata: dict = None, source: str = "notion"
+    ):
+        """存入父文档 (Upsert)"""
+        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
+        try:
+            with self._get_conn() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO documents (doc_id, content, metadata, source, last_synced_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(doc_id) DO UPDATE SET
+                        content=excluded.content,
+                        metadata=excluded.metadata,
+                        source=excluded.source,
+                        last_synced_at=excluded.last_synced_at
+                    """,
+                    (doc_id, content, meta_json, source, time.time()),
+                )
+                conn.commit()
                 print(f"📚 [DocStore] Saved Parent Document: {doc_id[:8]}...")
         except Exception as e:
             print(f"❌ [DocStore] Add Error: {e}")
-            # 这里不需要 conn.close()，因为 with 语句会自动处理
 
     def get_document(self, doc_id: str) -> Optional[str]:
         """读取父文档内容"""
@@ -74,13 +123,12 @@ class DocStore:
                     "SELECT content FROM documents WHERE doc_id = ?", (doc_id,)
                 )
                 row = cursor.fetchone()
-                if row:
-                    return row[0]
+                return row[0] if row else None
         except Exception as e:
             print(f"❌ [DocStore] Read Error: {e}")
         return None
 
-    def get_full_doc_with_meta(self, doc_id: str):
+    def get_full_doc_with_meta(self, doc_id: str) -> Optional[Dict[str, Any]]:
         """读取内容+元数据"""
         try:
             with self._get_conn() as conn:
@@ -90,7 +138,6 @@ class DocStore:
                     (doc_id,),
                 )
                 row = cursor.fetchone()
-
                 if row:
                     return {
                         "content": row[0],

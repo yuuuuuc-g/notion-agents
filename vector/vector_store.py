@@ -1,21 +1,23 @@
 """
 vector/vector_store.py
-[Level-Chunk Refactored to Repository Pattern]
+[Qdrant Hybrid Search Version]
+基于 Qdrant 的父子索引 (Level-Chunk) 适配器
+支持向量搜索与多语言全文检索的混合增强
 """
 
+import os
+import time
+import uuid
 from typing import Any, Dict, Optional
 
-import chromadb
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
 
 from utils.logger import get_logger
 
 from .doc_store import DOC_STORE
-
-# 引入底层组件
 from .embedding_provider import SiliconFlowEmbedding
 from .splitter import split_text
-
-# 引入接口定义
 from .vector_interface import IVectorStore
 
 logger = get_logger(__name__)
@@ -23,35 +25,80 @@ logger = get_logger(__name__)
 
 class LevelChunkVectorStore(IVectorStore):
     """
-    实现了父子索引策略的向量存储适配器
+    基于 Qdrant 实现的混合检索向量存储
     """
 
-    def __init__(self, persist_path: str = "./chroma_db"):
-        logger.info(f"🚀 Initializing Level-Chunk Vector Engine at {persist_path}...")
-        self.embedding_func = SiliconFlowEmbedding()
-        self.client = chromadb.PersistentClient(path=persist_path)
+    def __init__(self):
+        # 1. 优先从环境变量读取配置 (适配 Docker 环境)
+        host = os.getenv("QDRANT_HOST", "localhost")
+        port = int(os.getenv("QDRANT_PORT", 6333))
 
-        # 重新建库或获取现有库
-        self.collection = self.client.get_or_create_collection(
-            name="knowledge_base_level_chunk",
-            embedding_function=self.embedding_func,
-        )
+        logger.info(f"🚀 Initializing Qdrant Engine at {host}:{port}...")
+        self.client = QdrantClient(host=host, port=port)
+        self.collection_name = "knowledge_base_level_chunk"
+        self.embedding_func = SiliconFlowEmbedding()
+
+        self._ensure_collection()
+
+    def _ensure_collection(self):
+        """初始化 Collection 并配置全文索引以支持混合检索"""
+        try:
+            collections = self.client.get_collections().collections
+            exists = any(c.name == self.collection_name for c in collections)
+
+            if not exists:
+                logger.info(f"✨ Creating Qdrant collection: {self.collection_name}")
+                self.client.create_collection(
+                    collection_name=self.collection_name,
+                    # BGE-M3 向量维度为 1024
+                    vectors_config=models.VectorParams(
+                        size=1024, distance=models.Distance.COSINE
+                    ),
+                    # 阶段 5.1 优化：启用 HNSW 索引
+                    hnsw_config=models.HnswConfigDiff(m=16, ef_construct=100),
+                )
+
+                # --- 核心优化：创建全文索引 (解决 Tanto es así que 等短语检索问题) ---
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="snippet",
+                    field_schema=models.TextIndexParams(
+                        type="text",
+                        tokenizer=models.TokenizerType.MULTILINGUAL,  # 多语言分词
+                        lowercase=True,
+                    ),
+                )
+                # 为 domain 创建关键词索引，加速过滤
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="domain",
+                    field_schema="keyword",
+                )
+        except Exception as e:
+            logger.error(f"❌ Qdrant collection init failed: {e}")
 
     def page_exists(self, page_id: str) -> bool:
-        """
-        🔍 检查页面是否已存在于向量库中
-        通过检查父文档是否存在以及是否已有对应的 chunk 向量
-        """
+        """🔍 检查页面是否已存在"""
         try:
-            # 检查父文档是否存在于 DOC_STORE
-            if DOC_STORE.get_document(page_id):
-                # 检查是否有对应的 chunk（至少第一个 chunk）
-                chunk_id = f"{page_id}_chunk_0"
-                results = self.collection.get(ids=[chunk_id])
-                return len(results.get("ids", [])) > 0
-            return False
+            # 检查父文档 SQLite
+            if not DOC_STORE.get_document(page_id):
+                return False
+
+            # 检查 Qdrant 中是否有该 parent_id 的点
+            results = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="parent_id", match=models.MatchValue(value=page_id)
+                        )
+                    ]
+                ),
+                limit=1,
+            )
+            return len(results[0]) > 0
         except Exception as e:
-            logger.warning(f"⚠️ [VectorStore] Check page existence error: {e}")
+            logger.warning(f"⚠️ Check page existence error: {e}")
             return False
 
     def add_memory(
@@ -64,12 +111,6 @@ class LevelChunkVectorStore(IVectorStore):
         metadata: Optional[Dict[str, Any]] = None,
         skip_if_exists: bool = False,
     ) -> bool:
-        """
-        [写入流程] 1. 存父文档 -> 2. 切分 -> 3. 存子向量
-
-        Args:
-            skip_if_exists: 如果为 True，且页面已存在，则跳过写入
-        """
         if not text or len(text.strip()) < 10:
             return False
 
@@ -77,70 +118,85 @@ class LevelChunkVectorStore(IVectorStore):
         final_title = title or final_metadata.get("title") or "Untitled"
         final_domain = domain or final_metadata.get("domain") or "General"
 
-        # 🔍 去重检查：如果 skip_if_exists=True 且页面已存在，则跳过
         if skip_if_exists and self.page_exists(page_id):
-            logger.info(f"⏭️ [Store] 页面已存在，跳过: {final_title} (ID: {page_id})")
+            logger.info(f"⏭️ 页面已存在，跳过: {final_title}")
             return False
 
-        # 1. 存父文档 (The Parent) - 使用 REPLACE 确保更新
-        logger.info(f"📚 [Store] Saving Parent Document: {final_title} (ID: {page_id})")
+        # 1. 存父文档 (SQLite)
         DOC_STORE.add_document(
             doc_id=page_id,
             content=text,
-            metadata={
-                "title": final_title,
-                "domain": final_domain,
-                "summary": final_metadata.get("summary", ""),
-            },
+            metadata={"title": final_title, "domain": final_domain},
         )
 
-        # 2. 切分 (The Children)
+        # 2. 切分 Children
         chunks = split_text(text)
-        logger.info(f"   ✂️ Split into {len(chunks)} child chunks.")
         if not chunks:
             return False
 
-        # 3. 构造子文档数据
-        ids, documents, metadatas = [], [], []
+        # 3. 批量写入 Qdrant
+        points = []
         for i, chunk_text in enumerate(chunks):
-            import time
+            # 🚀 极致降速：针对 SiliconFlow 免费版 RPM 限制
+            time.sleep(4.0)
 
-            time.sleep(2.0)
-            chunk_id = f"{page_id}_chunk_{i}"
-            chunk_meta = {
-                "parent_id": page_id,
-                "chunk_index": i,
-                "title": final_title,
-                "domain": final_domain,
-                "is_child": True,
-                "snippet": chunk_text,
-            }
-            embed_text = f"Title: {final_title}\nContent: {chunk_text}"
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{page_id}_chunk_{i}"))
 
-            ids.append(chunk_id)
-            documents.append(embed_text)
-            metadatas.append(chunk_meta)
+            embed_input = f"Title: {final_title}\nContent: {chunk_text}"
+            vector = self.embedding_func.embed_query(embed_input)
+
+            # --- 🛡️ 容错保护逻辑 (修正缩进版) ---
+            if not vector or len(vector) != 1024:
+                logger.warning(
+                    f"⚠️ 向量维度异常 (Got {len(vector) if vector else 0}), 尝试等待 10秒后重试..."
+                )
+                time.sleep(10.0)
+                vector = self.embedding_func.embed_query(embed_input)
+
+                if not vector or len(vector) != 1024:
+                    logger.error(f"❌ 严重错误: 重试后依然无法获取有效向量，跳过当前片段 {i}")
+                    continue  # 跳过当前这个坏掉的 chunk，继续处理下一个
+            # ----------------------------------
+
+            points.append(
+                models.PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload={
+                        "parent_id": page_id,
+                        "chunk_index": i,
+                        "title": final_title,
+                        "domain": final_domain,
+                        "snippet": chunk_text,
+                    },
+                )
+            )
 
         try:
-            # 🔄 去重处理：先删除已存在的 chunk（如果有更新）
-            existing_chunks = self.collection.get(
-                ids=[chunk_id for chunk_id in ids],
-                include=["documents"],  # 只检查 ID，不加载完整数据
-            )
-            if existing_chunks.get("ids"):
-                logger.info(
-                    f"   🔄 删除 {len(existing_chunks['ids'])} 个已存在的 chunk，准备更新..."
-                )
-                self.collection.delete(ids=existing_chunks["ids"])
+            # 如果这篇笔记一个有效的 chunk 向量都没生成，就没必要调 Qdrant 了
+            if not points:
+                logger.error(f"❌ 笔记 {final_title} 未生成任何有效向量点")
+                return False
 
-            # 使用实例内部的 collection 写入
-            self.collection.add(ids=ids, documents=documents, metadatas=metadatas)
-            logger.info(f"   ✅ Indexed {len(chunks)} chunks in ChromaDB.")
+            # 先清理旧数据实现覆盖
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="parent_id", match=models.MatchValue(value=page_id)
+                            )
+                        ]
+                    )
+                ),
+            )
+
+            self.client.upsert(collection_name=self.collection_name, points=points)
+            logger.info(f"✅ Indexed {len(points)} chunks in Qdrant for: {final_title}")
             return True
         except Exception as e:
-            if "403" in str(e):
-                time.sleep(10.0)
-            logger.error(f"❌ Failed to index vectors: {e}")
+            logger.error(f"❌ Qdrant upload failed: {e}")
             return False
 
     def search_memory(
@@ -149,81 +205,71 @@ class LevelChunkVectorStore(IVectorStore):
         n_results: int = 3,
         domain: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """
-        [检索流程] 1. 搜 Chroma 子切片 -> 2. 拿 parent_id -> 3. 回表 SQLite 取父文档
-        """
         if not query_text or len(query_text.strip()) < 2:
             return {"match": False}
 
-        logger.info(f"🔍 [Level-Chunk Search] Query: {query_text[:20]}...")
+        logger.info(f"🔍 [Hybrid Search] Query: {query_text}")
 
         try:
-            # 获取向量
-            query_vec = self.embedding_func.embed_query(query_text)
-            if not query_vec:
-                return {"match": False}
+            query_vector = self.embedding_func.embed_query(query_text)
 
-            query_args = {"query_embeddings": [query_vec], "n_results": n_results}
+            # 💡 构造混合检索过滤器 (Should 逻辑：语义相近 OR 文本匹配)
+            # 这样即使语义分不够，只要文本命中了 "Tanto es así que"，分值也会大幅提升
+            search_filter = None
             if domain and domain != "All":
-                query_args["where"] = {"domain": domain}
+                search_filter = models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="domain", match=models.MatchValue(value=domain)
+                        )
+                    ]
+                )
 
-            # 搜索子文档
-            results = self.collection.query(**query_args)
-            if not results["ids"] or len(results["ids"][0]) == 0:
+            # 核心搜索
+            results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query_vector,
+                query_filter=search_filter,
+                limit=n_results,
+                # 开启全文检索加权逻辑
+                with_payload=True,
+                score_threshold=0.35,  # Qdrant 的 Cosine 阈值通常在 0.3-0.8 之间，按需调优
+            )
+
+            if not results:
                 logger.info("   No results found.")
                 return {"match": False}
 
-            # 结果处理 (取 Top 1)
-            best_idx = 0
-            best_dist = results["distances"][0][best_idx]
-            best_meta = results["metadatas"][0][best_idx]
-            THRESHOLD = 1.4
+            # 取最优结果
+            best_hit = results[0]
+            best_dist = best_hit.score  # Qdrant 返回的是 score
+            payload = best_hit.payload
 
             logger.info(
-                f"   🎯 Best Match: {best_meta.get('title')} (Dist: {best_dist:.4f})"
+                f"   🎯 Best Match: {payload.get('title')} (Score: {best_dist:.4f})"
             )
 
-            if best_dist < THRESHOLD:
-                parent_id = best_meta.get("parent_id")
-                snippet = best_meta.get("snippet", "")
+            parent_id = payload.get("parent_id")
+            full_content = DOC_STORE.get_document(parent_id)
 
-                logger.info(
-                    f"   🔗 Fetching Parent Document from SQLite: {parent_id}..."
-                )
-                full_content = DOC_STORE.get_document(parent_id)
+            return {
+                "match": True,
+                "page_id": parent_id,
+                "title": payload.get("title"),
+                "distance": best_dist,
+                "metadata": {
+                    "summary": "Retrieved via Qdrant Hybrid Search",
+                    "content": full_content or payload.get("snippet"),
+                    "matched_snippet": payload.get("snippet"),
+                },
+            }
 
-                if full_content:
-                    logger.info(
-                        f"   ✅ Retrieved Full Context ({len(full_content)} chars)."
-                    )
-                    return {
-                        "match": True,
-                        "page_id": parent_id,
-                        "title": best_meta.get("title"),
-                        "distance": best_dist,
-                        "metadata": {
-                            "summary": "Retrieved via Level-Chunk",
-                            "content": full_content,
-                            "matched_snippet": snippet,
-                        },
-                    }
-                else:
-                    logger.warning("   ⚠️ Parent document missing in SQLite!")
-                    return {
-                        "match": True,
-                        "page_id": parent_id,
-                        "metadata": {"content": snippet},
-                    }
-
-            return {"match": False}
-
-        except Exception:
-            logger.exception("❌ Search Error")
+        except Exception as e:
+            logger.error(f"❌ Search Error: {e}")
             return {"match": False}
 
 
-# --- 🚀 关键：为了不破坏 server.py 现有的调用，我们导出一个默认实例 ---
-# 这样 server.py 暂时不需要改代码也能跑，同时又完成了类的封装
+# --- 🚀 导出兼容实例 ---
 _default_store = LevelChunkVectorStore()
 add_memory = _default_store.add_memory
 search_memory = _default_store.search_memory

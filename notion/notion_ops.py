@@ -29,21 +29,61 @@ class NotionService(INotionService):
         self.notion = Client(auth=token)
         self.default_db_id = default_db_id
 
-    def _append_children_in_batches(self, page_id: str, children: List[Dict]):
-        """分批追加 Block，防止超过 100 个限制"""
+    def _append_children_in_batches(self, parent_id: str, children: List[Dict]):
+        """
+        🔥 递归追加 Block：解决 Notion API 不允许在单次请求中创建深层嵌套的问题。
+        逻辑：
+        1. 剥离当前层级 Block 的 children。
+        2. 提交当前层级的“扁平”Block。
+        3. 拿到 API 返回的 ID 后，递归为有子项的 Block 追加内容。
+        """
         if not children:
             return
+
         batch_size = 100
-        batches = [
-            children[i : i + batch_size] for i in range(0, len(children), batch_size)
-        ]
-        logger.info(f"📡 正在分 {len(batches)} 批次上传 {len(children)} 个 Block...")
-        for idx, batch in enumerate(batches):
+        # 对当前层级的 Block 进行分批处理
+        for i in range(0, len(children), batch_size):
+            batch = children[i : i + batch_size]
+
+            # 🔍 1. 递归准备：剥离并记录哪些 Block 带有子项
+            # 注意：我们必须深度拷贝一份，或者在 pop 后能找回关联关系
+            sub_children_map = {}  # 记录 {批次内的索引: 子 Block 列表}
+
+            clean_batch = []
+            for idx, block in enumerate(batch):
+                # 复制一份，避免修改原始数据影响其他逻辑
+                block_copy = {k: v for k, v in block.items()}
+                b_type = block_copy.get("type")
+
+                # 如果这个 Block 内部带有嵌套内容
+                if b_type and "children" in block_copy.get(b_type, {}):
+                    # 剥离出子项，存入 map
+                    sub_children_map[idx] = block_copy[b_type].pop("children")
+
+                # 某些旧版逻辑可能直接在 block 根部带 children
+                elif "children" in block_copy:
+                    sub_children_map[idx] = block_copy.pop("children")
+
+                clean_batch.append(block_copy)
+
+            # 🚀 2. 提交当前这批扁平化的 Block
             try:
-                self.notion.blocks.children.append(block_id=page_id, children=batch)
-                logger.info(f"   - ✅ 批次 {idx + 1}/{len(batches)} 上传成功。")
+                logger.info(f"📡 正在向 {parent_id[:8]} 追加 {len(clean_batch)} 个基础 Block...")
+                response = self.notion.blocks.children.append(
+                    block_id=parent_id, children=clean_batch
+                )
+
+                # 拿到 API 返回的实际结果（包含新生成的 Block ID）
+                results = response.get("results", [])
+
+                # 🔄 3. 递归处理：如果这一批里有被剥离的子项，现在逐一挂载
+                for batch_idx, sub_blocks in sub_children_map.items():
+                    new_parent_id = results[batch_idx]["id"]
+                    # 递归调用自身，将子项挂载到刚生成的父 Block ID 下
+                    self._append_children_in_batches(new_parent_id, sub_blocks)
+
             except Exception as e:
-                logger.error(f"   - ❌ 批次 {idx + 1} 失败: {e}")
+                logger.error(f"❌ 追加 Block 失败: {e}")
                 raise e
 
     def fetch_database_content(self, db_id: Optional[str] = None) -> List[Dict]:
@@ -115,7 +155,8 @@ class NotionService(INotionService):
         self, title: str, children: List[Dict], icon: str = "🧠", db_id: str = None
     ) -> Dict:
         """
-        Exocortex 专用接口：采用“先创建、后追加”策略。
+        🚀 增强版创建接口：实现“事务回滚”机制。
+        如果追加内容失败，自动归档（删除）已创建的空页面，保证数据一致性。
         """
         target_db = db_id if db_id else self.default_db_id
         if not target_db:
@@ -123,8 +164,10 @@ class NotionService(INotionService):
 
         logger.info(f"✍️ [Notion Service] 正在创建页面: {title}")
 
+        page_id = None  # 追踪已创建的页面 ID 用于回滚
+
         try:
-            # 1. 先创建一个空页面
+            # 1. 尝试创建空页面
             response = self.notion.pages.create(
                 parent={"database_id": target_db},
                 icon={"type": "emoji", "emoji": icon},
@@ -134,14 +177,23 @@ class NotionService(INotionService):
             page_id = response["id"]
             logger.info(f"✅ 空页面创建成功: {page_id}")
 
-            # 2. 批量追加内容
+            # 2. 递归追加内容（这里会调用我们刚才改好的递归 _append_children_in_batches）
             if children:
-                self._append_children_in_batches(page_id, children)
+                try:
+                    self._append_children_in_batches(page_id, children)
+                    logger.info(f"🎉 页面内容同步完成: {title}")
+                except Exception as inner_e:
+                    # 💥 核心回滚点：内容追加失败，销毁现场
+                    logger.error("⚠️ 内容追加中断，启动自动回滚逻辑...")
+                    self.delete_page(page_id)
+                    logger.warning(f"🧹 已清理不完整的残余页面: {page_id}")
+                    raise inner_e
 
             return response
 
         except Exception as e:
-            logger.error(f"❌ 页面创建失败: {e}")
+            # 如果连空页面都没建成功，或者回滚后重新抛出异常
+            logger.error(f"❌ [Transaction Failed] 页面任务最终失败: {e}")
             raise e
 
     def delete_page(self, page_id: str) -> bool:
