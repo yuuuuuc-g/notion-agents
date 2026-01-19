@@ -1,3 +1,0 @@
-"""
-Exocortex test package.
-"""
