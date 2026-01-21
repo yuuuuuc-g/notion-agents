@@ -1,0 +1,35 @@
+# === 核心框架 (安全升级) ===
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.3
+pydantic-settings>=2.1.0
+itsdangerous>=2.1.0
+
+# === 数据库与缓存 (安全升级) ===
+redis[hiredis]>=5.0.1
+qdrant-client>=1.7.0
+notion-client>=2.2.1
+
+# === AI 与 逻辑编排 (适配你现有的新版本) ===
+langchain>=0.1.0
+langchain-community>=0.0.10
+langchain-openai>=0.0.2
+langgraph>=0.0.10
+openai>=1.6.1
+
+# === 工具与安全 ===
+cryptography>=41.0.7
+python-multipart>=0.0.6
+python-magic>=0.4.27
+slowapi>=0.1.9
+python-dotenv>=1.0.0
+watchdog>=4.0.0
+
+# === 文件处理 ===
+pypdf>=4.0.0
+pdfplumber>=0.10.0
+beautifulsoup4>=4.12.0
+prometheus-client>=0.19.0
+edge-tts
+pydub
+EbookLib
