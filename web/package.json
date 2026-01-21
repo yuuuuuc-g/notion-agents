@@ -14,14 +14,19 @@
   },
   "dependencies": {
     "clsx": "^2.1.1",
+    "highlight.js": "^11.11.1",
+    "katex": "^0.16.27",
     "lucide-react": "^0.468.0",
     "next": "15.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^9.0.1",
+    "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.0",
-    "tailwind-merge": "^2.5.5"
+    "remark-math": "^6.0.0",
+    "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

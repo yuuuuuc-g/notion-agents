@@ -16,7 +16,7 @@ export interface Message {
 // --- 常量配置 ---
 const API_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 const API_SECRET = process.env.NEXT_PUBLIC_API_SECRET;
-const MODEL_NAME = "deepseek-ai/DeepSeek-V3"; // 保持你修改后的模型名
+const MODEL_NAME = "deepseek-ai/DeepSeek-V3";
 
 export function useBioBrain() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -28,8 +28,7 @@ export function useBioBrain() {
     if (!query.trim() || isLoading) return;
 
     // 1. 乐观更新 UI
-    const userMsg: Message = { role: "user", content: query };
-    setMessages((prev) => [...prev, userMsg, { role: "assistant", content: "" }]);
+    setMessages((prev) => [...prev, { role: "user", content: query }, { role: "assistant", content: "" }]);
     setIsLoading(true);
 
     try {
@@ -52,9 +51,8 @@ export function useBioBrain() {
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let aiResponse = "";
 
-      // ⚡️ 性能优化：缓存已解析的数据，避免重复正则匹配
+      let aiResponse = "";
       let parsedAudioUrl: string | undefined;
       let parsedMetadata: any = null;
 
@@ -65,7 +63,7 @@ export function useBioBrain() {
         const chunkValue = decoder.decode(value, { stream: true });
         aiResponse += chunkValue;
 
-        // 1. 解析音频 (一旦找到就不再重复匹配，提升性能)
+        // ⚡️ 优化：提取音频 URL
         if (!parsedAudioUrl) {
           const audioMatch = aiResponse.match(/\[AUDIO_URL:\s*(audio_[a-f0-9]+\.mp3)\]/i);
           if (audioMatch) {
@@ -73,28 +71,32 @@ export function useBioBrain() {
           }
         }
 
-        // 2. 解析元数据 (尝试解析直到成功)
+        // ⚡️ 优化：提取元数据
         if (!parsedMetadata) {
           const metaMatch = aiResponse.match(/\[KNOWLEDGE_META:\s*({[\s\S]*?})\]/i);
           if (metaMatch) {
             try {
               parsedMetadata = JSON.parse(metaMatch[1]);
             } catch (e) {
-              // JSON 不完整，等待下一块
+              // 等待数据完整
             }
           }
         }
 
-        // 3. 实时更新 UI
+        // 实时更新 UI (深度清洗)
         setMessages((prev) => {
           const newMessages = [...prev];
           const lastMsg = newMessages[newMessages.length - 1];
           if (lastMsg.role === "assistant") {
-            // 实时清理标签
-            lastMsg.content = aiResponse
-              .replace(/\[AUDIO_URL:.*?\]/gi, "")
-              .replace(/\[KNOWLEDGE_META:.*?\]/gi, "")
+            // 🔥 核心修改：不仅移除标签，还移除生成提示语
+            let cleanContent = aiResponse
+              .replace(/\[KNOWLEDGE_META:[\s\S]*?\]/g, "") // 移除元数据标签
+              .replace(/\[AUDIO_URL:.*?\]/g, "")            // 移除音频标签
+              .replace(/✅\s*(Audio generated|音频已生成).*?Path:.*?mp3/gi, "") // 移除英文/中文提示语
+              .replace(/✅\s*(Audio generated|音频已生成).*?(\n|$)/gi, "")       // 移除简短提示
               .trim();
+
+            lastMsg.content = cleanContent;
 
             if (parsedAudioUrl) lastMsg.audioUrl = parsedAudioUrl;
             if (parsedMetadata) lastMsg.knowledgeContext = parsedMetadata;
@@ -105,27 +107,29 @@ export function useBioBrain() {
 
     } catch (error) {
       console.error("Chat Error:", error);
-      // 可选：添加一条错误消息给用户
-      setMessages(prev => [...prev, { role: "assistant", content: "⚠️ 通信中断，请重试。" }]);
+      setMessages(prev => {
+          const list = [...prev];
+          if (list.length > 0 && list[list.length - 1].role === 'assistant') {
+              list[list.length - 1].content += "\n\n⚠️ *Connection interrupted.*";
+          }
+          return list;
+      });
     } finally {
       setIsLoading(false);
     }
-  }, [fileId, isLoading]); // 依赖 fileId
+  }, [fileId, isLoading]);
 
   // 文件上传逻辑
   const uploadFiles = useCallback(async (files: File[]) => {
     const formData = new FormData();
     files.forEach(file => formData.append("files", file));
 
-    // 添加临时状态
-    setMessages(prev => [...prev, { role: "assistant", content: "🔄 Syncing context..." }]);
+    setMessages(prev => [...prev, { role: "assistant", content: "🔄 Syncing neural context..." }]);
 
     try {
       const res = await fetch(`${API_URL}/upload`, {
         method: "POST",
         body: formData,
-        // 上传接口可能不需要 Authorization，视你后端 bandwidth_limiter 而定，建议加上以防万一
-        // headers: { "Authorization": `Bearer ${API_SECRET}` }
       });
       const data = await res.json();
 
@@ -133,7 +137,7 @@ export function useBioBrain() {
         setFileId(data.file_id);
         setMessages(prev => {
            const list = [...prev];
-           list[list.length - 1].content = "✅ Neural cache updated. Context loaded.";
+           list[list.length - 1].content = `✅ **Context Synced.**\nAnalyzed ${data.file_count} files. Memory ID: \`${data.file_id.slice(0,8)}\``;
            return list;
         });
       }
@@ -146,11 +150,5 @@ export function useBioBrain() {
     }
   }, []);
 
-  return {
-    messages,
-    isLoading,
-    fileId,
-    sendMessage,
-    uploadFiles
-  };
+  return { messages, isLoading, fileId, sendMessage, uploadFiles };
 }
