@@ -1,7 +1,7 @@
 """
 core/container.py
 轻量级依赖注入容器 (Pure Python Version)
-重构版本 v4.0.1 - 包含所有服务 (Chat, Archive, Audio, Sync)
+重构版本 v4.1.0 - 适配 Merged VectorStore (v5)
 """
 from langchain_openai import ChatOpenAI
 
@@ -35,8 +35,12 @@ class Container:
     def cache_wrapper(self):
         return CacheWithFallback(self.redis_client())
 
-    # 4. 向量存储服务
-    def vector_store(self):
+    # 4. 向量存储服务 (Updated to use v5 Merged Store)
+    def vector_store(self) -> LevelChunkVectorStore:
+        """
+        向量存储服务
+        特性：层次化分块 + 混合检索 (Dense + Sparse Fusion)
+        """
         return LevelChunkVectorStore()
 
     # 5. Notion 服务
@@ -77,7 +81,7 @@ class Container:
             notion_service=self.notion_service(),
         )
 
-    # 9. 🔥 音频服务 (补回丢失的方法)
+    # 9. 音频服务
     def audio_service(self):
         from services.audio_service import AudioService
 

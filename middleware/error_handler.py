@@ -4,8 +4,7 @@ middleware/error_handler.py
 功能：
 1. 提供标准化的错误响应格式 (ErrorResponse)
 2. 统一捕获 HTTP, Validation, RateLimit, 业务逻辑 和 未知异常
-3. 提供详细的结构化日志
-4. 提供注册辅助函数，净化 server.py
+3. 提供注册辅助函数，净化 server.py
 """
 import os
 import traceback
@@ -38,7 +37,7 @@ class ErrorResponse:
 
     def to_dict(self, include_details: bool = True) -> dict:
         response = {
-            "status": "error",  # 保持与之前的一致性
+            "status": "error",
             "code": self.error_code,
             "message": self.message,
         }
@@ -79,6 +78,7 @@ async def validation_exception_handler(
     errors = []
     for error in exc.errors():
         # 简化 Pydantic 的错误信息
+        # loc 通常是 ('body', 'query', etc)
         loc_str = " -> ".join(str(loc) for loc in error["loc"])
         errors.append({"field": loc_str, "msg": error["msg"]})
 
@@ -169,11 +169,18 @@ async def business_exception_handler(
 def register_exception_handlers(app: FastAPI):
     """
     一键注册所有异常处理器
+    推荐在 server.py 中调用此函数，替代手动的 add_exception_handler
     """
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
-    app.add_exception_handler(BusinessException, business_exception_handler)  # 注册自定义异常
+    app.add_exception_handler(BusinessException, business_exception_handler)
     app.add_exception_handler(Exception, general_exception_handler)
 
     logger.info("🛡️ Exception Handlers Registered (Pro Mode)")
+
+
+# === 兼容性别名 ===
+# 你的 server.py 目前引用的是 global_exception_handler
+# 这里的别名确保 server.py 不会因为找不到名字而报错
+global_exception_handler = general_exception_handler

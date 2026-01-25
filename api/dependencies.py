@@ -15,6 +15,7 @@ from services.sync_service import SyncService
 from utils.cache_fallback import CacheWithFallback
 from vector.vector_store import LevelChunkVectorStore
 
+# 实例化一个用于依赖注入的限流器
 _bandwidth_limiter = BandwidthLimiter(max_mb_per_minute=100)
 
 

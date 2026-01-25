@@ -2,18 +2,18 @@
 notion/notion_ops.py
 [Infrastructure Decoupling Refactored]
 Notion 服务的具体实现类，支持依赖注入。
-✅ 修正版 v2: 回退到 requests 方式拉取数据 (最稳妥)，但修复 Token 读取逻辑
+✅ 升级 v5.0: 增加 '外科手术' (Block-Level) 操作能力
 """
 
 import concurrent.futures
 from typing import Dict, List, Optional
 
-import requests  # 恢复 requests 库的使用
+import requests
 from notion_client import Client
 
 from utils.logger import get_logger
 
-from .block_builder import markdown_to_blocks, parse_rich_text
+from .block_builder import markdown_to_blocks
 from .notion_interface import INotionService
 
 logger = get_logger(__name__)
@@ -28,16 +28,12 @@ class NotionService(INotionService):
         if not token:
             raise ValueError("❌ Notion Token 不能为空")
 
-        # 保存 token，供 requests 使用
         self.token = token
-        # SDK 仅用于创建/更新页面操作 (这些操作 SDK 封装得比较好)
         self.notion = Client(auth=token)
         self.default_db_id = default_db_id
 
+    # ... (保留原有的 _append_children_in_batches 方法) ...
     def _append_children_in_batches(self, parent_id: str, children: List[Dict]):
-        """
-        🔥 递归追加 Block
-        """
         if not children:
             return
 
@@ -59,7 +55,6 @@ class NotionService(INotionService):
                 clean_batch.append(block_copy)
 
             try:
-                # logger.info(f"📡 追加 {len(clean_batch)} 个 Block...")
                 response = self.notion.blocks.children.append(
                     block_id=parent_id, children=clean_batch
                 )
@@ -73,18 +68,14 @@ class NotionService(INotionService):
                 logger.error(f"❌ 追加 Block 失败: {e}")
                 raise e
 
+    # ... (保留原有的 fetch_database_content 方法) ...
     def fetch_database_content(self, db_id: Optional[str] = None) -> List[Dict]:
-        """
-        使用 requests 直接调用 API (回归原始稳定逻辑)
-        """
         target_db = db_id if db_id else self.default_db_id
         if not target_db:
             logger.error("❌ 未提供 Database ID")
             return []
 
         clean_db_id = target_db.replace("-", "")
-
-        # ✅ 核心修复：使用依赖注入的 Token，而不是 os.getenv
         token = self.token
 
         logger.info(f"🔍 [Standard Sync] 正在拉取数据库: {target_db}")
@@ -106,20 +97,16 @@ class NotionService(INotionService):
                 if next_cursor:
                     payload["start_cursor"] = next_cursor
 
-                # 🚀 回归 requests，稳！
                 response = requests.post(url, headers=headers, json=payload)
 
                 if response.status_code != 200:
                     logger.error(
                         f"❌ Notion API 报错 (Status {response.status_code}): {response.text}"
                     )
-                    # 遇到 API 错误直接停止，防止死循环
                     break
 
                 data = response.json()
                 results = data.get("results", [])
-
-                # 分页处理
                 has_more = data.get("has_more", False)
                 next_cursor = data.get("next_cursor")
 
@@ -127,7 +114,6 @@ class NotionService(INotionService):
                     page_id = page["id"]
                     properties = page.get("properties", {})
 
-                    # 提取标题
                     title = "Untitled"
                     for prop in properties.values():
                         if isinstance(prop, dict) and prop.get("type") == "title":
@@ -136,13 +122,12 @@ class NotionService(INotionService):
                                 title = title_objs[0].get("plain_text", "Untitled")
                             break
 
-                    # 提取内容
                     content = self.get_page_text(page_id)
                     if content.strip():
                         pages_data.append(
                             {"id": page_id, "title": title, "content": content}
                         )
-                        logger.info(f"   - ✅ 抓取成功: {title}")
+                        # logger.info(f"   - ✅ 抓取成功: {title}")
 
             return pages_data
 
@@ -150,10 +135,10 @@ class NotionService(INotionService):
             logger.error(f"❌ 数据库拉取通讯失败: {e}")
             raise e
 
+    # ... (保留原有的 create_page 方法) ...
     def create_page(
         self, title: str, children: List[Dict], icon: str = "📄", db_id: str = None
     ) -> Dict:
-        """增强版创建接口：带回滚机制"""
         target_db = db_id if db_id else self.default_db_id
         if not target_db:
             raise ValueError("❌ 未配置有效的 Database ID")
@@ -186,6 +171,7 @@ class NotionService(INotionService):
             logger.error(f"❌ 页面任务失败: {e}")
             raise e
 
+    # ... (保留 delete_page, get_page_text, _delete_block_worker, overwrite_page_content) ...
     def delete_page(self, page_id: str) -> bool:
         """归档页面"""
         try:
@@ -198,8 +184,6 @@ class NotionService(INotionService):
     def get_page_text(self, page_id: str) -> str:
         """提取页面文本内容"""
         try:
-            # 这里的 list 方法通常 SDK 兼容性较好，保留 SDK 调用
-            # 如果这里也报错，我们再改回 requests
             response = self.notion.blocks.children.list(block_id=page_id)
             blocks = response.get("results", [])
             lines = []
@@ -236,8 +220,6 @@ class NotionService(INotionService):
             has_more = True
             start_cursor = None
             while has_more:
-                # 为了保持一致，这里如果是简单的 list 也可以保留 SDK
-                # 如果报错再换
                 res = self.notion.blocks.children.list(
                     block_id=page_id, start_cursor=start_cursor
                 )
@@ -251,22 +233,87 @@ class NotionService(INotionService):
                     executor.map(self._delete_block_worker, all_block_ids)
 
             # 3. 构造并写入新内容
-            new_children = []
-            if summary:
-                new_children.append(
-                    {
-                        "object": "block",
-                        "type": "callout",
-                        "callout": {
-                            "rich_text": parse_rich_text(summary),
-                            "icon": {"emoji": "💡"},
-                            "color": "gray_background",
-                        },
-                    }
-                )
-            new_children.extend(markdown_to_blocks(markdown_body))
+            new_children = markdown_to_blocks(markdown_body)
             self._append_children_in_batches(page_id, new_children)
             return True
         except Exception as e:
             logger.error(f"❌ 覆盖失败: {e}")
+            return False
+
+    # ==========================================
+    # 🔥 新增：外科手术式操作能力 (Surgical Capabilities)
+    # ==========================================
+
+    def get_page_structure(self, page_id: str) -> List[Dict]:
+        """
+        获取页面的 Block 结构树（ID + 文本摘要）。
+        AI 需要通过这个方法拿到每一段话对应的 block_id，才能进行修改。
+        """
+        logger.info(f"🔍 [Surgical] 扫描页面结构: {page_id}")
+        blocks = []
+        has_more = True
+        start_cursor = None
+
+        try:
+            while has_more:
+                res = self.notion.blocks.children.list(
+                    block_id=page_id, start_cursor=start_cursor
+                )
+                for b in res["results"]:
+                    b_type = b["type"]
+                    content = ""
+                    # 提取富文本内容
+                    if "rich_text" in b.get(b_type, {}):
+                        content = "".join(
+                            [t["plain_text"] for t in b[b_type]["rich_text"]]
+                        )
+
+                    if content:  # 只返回有内容的块
+                        blocks.append(
+                            {
+                                "block_id": b["id"],
+                                "type": b_type,
+                                "content_preview": content[:200],  # 取前200字做指纹
+                            }
+                        )
+                has_more = res["has_more"]
+                start_cursor = res["next_cursor"]
+            return blocks
+        except Exception as e:
+            logger.error(f"❌ 结构扫描失败: {e}")
+            return []
+
+    def update_block_text(self, block_id: str, new_text: str):
+        """
+        外科手术：修改指定 Block 的文本内容
+        """
+        logger.info(f"🔪 [Surgical] 更新 Block {block_id}...")
+        try:
+            # 默认尝试更新 paragraph，这是最常见的类型
+            self.notion.blocks.update(
+                block_id=block_id,
+                paragraph={"rich_text": [{"text": {"content": new_text}}]},
+            )
+            logger.info("✅ Block 已更新")
+            return True
+        except Exception as e:
+            logger.error(f"❌ 更新失败: {e}")
+            return False
+
+    def insert_blocks_after(
+        self, parent_id: str, after_block_id: str, content_markdown: str
+    ):
+        """
+        精准插入：在某个 Block 之后插入新内容
+        """
+        logger.info(f"💉 [Surgical] 在 {after_block_id} 后插入内容...")
+        try:
+            new_blocks = markdown_to_blocks(content_markdown)
+            self.notion.blocks.children.append(
+                block_id=parent_id, children=new_blocks, after=after_block_id
+            )
+            logger.info("✅ 内容插入成功")
+            return True
+        except Exception as e:
+            logger.error(f"❌ 插入失败: {e}")
             return False

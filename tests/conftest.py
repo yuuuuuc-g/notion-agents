@@ -1,69 +1,134 @@
 """
 tests/conftest.py
-Global test fixtures for Exocortex test suite.
-适配 v3.4+ 架构：修正导入路径，适配 DI 容器
+Global test fixtures for Biobrain test suite.
+✅ 最终架构版：使用 Fake (Simple Classes) 彻底解决 FastAPI 序列化和 Async Loop 冲突
 """
 
 import os
-import tempfile
-from typing import Generator
-from unittest.mock import MagicMock, patch
+from typing import Dict, Generator, List
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
 
-# 1. 设置测试环境变量 (在导入 app 之前)
+# 1. 设置测试环境变量
 os.environ["ENVIRONMENT"] = "testing"
-os.environ["API_SECRET"] = "test-secret-key-must-be-long-enough-32chars"  # 需满足长度要求
+os.environ["API_SECRET"] = "test-secret-key-must-be-long-enough-32chars"
 os.environ["NOTION_TOKEN"] = "mock-notion-token"
 os.environ["SILICON_KEY"] = "mock-silicon-key"
 os.environ["DB_SPANISH_ID"] = "mock-spanish-db"
 
-
-# 2. 导入应用和新的依赖路径
-# 🔥 关键修正：从 api.dependencies 导入依赖函数
+# 2. 导入依赖
 from api.dependencies import (  # noqa: E402
+    get_archive_service,
+    get_audio_service,
     get_cache_wrapper,
+    get_chat_service,
     get_notion_service,
     get_redis,
     get_settings,
+    get_sync_service,
     get_vector_store,
 )
 from config.settings import Settings  # noqa: E402
 from server import app  # noqa: E402
 
-# 尝试导入用户自定义的 Mocks，如果不存在则使用 MagicMock 兜底
-try:
-    from tests.mocks import MockChatModel, MockNotionService, MockVectorStore
-except ImportError:
-    # 定义兜底 Mock 类，防止因缺少文件导致测试无法运行
-    class MockNotionService(MagicMock):
-        def reset(self):
-            pass
+# =============================================================================
+# ✅ Simple Mock Classes (Fake 模式) - 修正了方法名
+# =============================================================================
 
-    class MockVectorStore(MagicMock):
-        def reset(self):
-            pass
 
-    class MockChatModel(MagicMock):
-        def reset(self):
-            pass
+class SimpleNotionMock:
+    """Notion Service Fake"""
 
-        def __init__(self, responses=None, tool_calls=None):
-            super().__init__()
+    def __init__(self):
+        self.create_page_called = False
+
+    def create_page(self, title: str, children: List[Dict], **kwargs) -> Dict:
+        self.create_page_called = True
+        return {"id": "mock-page-id", "title": title}
+
+    def fetch_database_content(self, db_id: str, **kwargs) -> List[Dict]:
+        return []
+
+
+class SimpleVectorMock:
+    """Vector Store Fake"""
+
+    def __init__(self):
+        self.memories = {}
+
+    def add_memory(self, page_id: str, text: str, **kwargs) -> bool:
+        self.memories[page_id] = text
+        return True
+
+    # 兼容旧接口
+    def search_memory(self, query_text: str, **kwargs) -> Dict:
+        return {"match": False, "results": []}
+
+    # 兼容新接口
+    def search_with_context(self, query: str, **kwargs) -> Dict:
+        return {"match": False, "results": []}
+
+    def page_exists(self, page_id: str) -> bool:
+        return page_id in self.memories
+
+    def delete_page(self, page_id: str) -> bool:
+        return True
+
+
+class SimpleChatServiceMock:
+    """Chat Service Fake"""
+
+    async def chat(self, message: str, **kwargs) -> Dict:
+        return {"response": "Mock response"}
+
+    # 🔥 修正方法名：stream_chat -> stream_response
+    async def stream_response(self, query: str, **kwargs):
+        yield "Hello"
+        yield " World"
+
+
+class SimpleSyncServiceMock:
+    """Sync Service Fake"""
+
+    # 🔥 修正方法名：sync_all_pages -> sync_database
+    async def sync_database(self, db_id: str, **kwargs) -> Dict:
+        return {
+            "status": "success",
+            "synced_count": 0,
+            "message": "Mock sync completed",
+        }
+
+
+class SimpleAudioServiceMock:
+    """Audio Service Fake"""
+
+    async def generate_audio_file(self, text: str, **kwargs) -> str:
+        return "/mock/path/to/audio.mp3"
+
+
+class SimpleArchiveServiceMock:
+    """Archive Service Fake"""
+
+    # 🔥 修正方法名：archive_file -> archive_session
+    async def archive_session(
+        self, file_id: str, summary: str, thread_id: str, **kwargs
+    ) -> Dict:
+        return {
+            "status": "success",
+            "notion_id": "mock-id",
+            "notion_url": "http://mock",
+        }
 
 
 # =============================================================================
-# Configuration Fixtures
+# Fixtures
 # =============================================================================
 
 
 @pytest.fixture(scope="session")
 def mock_settings() -> Settings:
-    """
-    提供符合 Pydantic 结构的测试配置
-    """
-    # RedisClient 已经全局 mock，此处无需临时设置 Redis 相关的环境变量
     return Settings(
         ENVIRONMENT="testing",
         DEBUG=True,
@@ -77,103 +142,113 @@ def mock_settings() -> Settings:
         AUDIO_DIR="./tests/fixtures/audio",
         TTS_RATE="-10%",
         USE_LOCAL_NANOGPT=False,
-        # Pydantic 会自动处理 PROJECT_ROOT，无需手动指定
     )
 
 
-# =============================================================================
-# Mock Service Fixtures
-# =============================================================================
+# 实例化 Fake 对象
+@pytest.fixture
+def mock_notion_service():
+    return SimpleNotionMock()
 
 
 @pytest.fixture
-def mock_notion_service() -> MagicMock:
-    """Provide mock Notion service."""
-    # 如果你有真实的 MockNotionService 类，这里会使用它
-    # 否则使用 MagicMock
-    service = MockNotionService()
-    # 确保 mock 对象有必要的方法签名
-    if isinstance(service, MagicMock):
-        service.create_page.return_value = {"id": "mock-page-id"}
-        service.fetch_database_content.return_value = []
-
-    yield service
-    if hasattr(service, "reset"):
-        service.reset()
+def mock_vector_store():
+    return SimpleVectorMock()
 
 
 @pytest.fixture
-def mock_vector_store() -> MagicMock:
-    """Provide mock vector store."""
-    store = MockVectorStore()
-    if isinstance(store, MagicMock):
-        store.add_memory.return_value = True
-        store.search_memory.return_value = {"match": False}
-
-    yield store
-    if hasattr(store, "reset"):
-        store.reset()
-
-
-@pytest.fixture(autouse=True)  # <-- Add autouse=True to apply this patch automatically
-def mock_redis_client_class():
-    """Patch the RedisClient class to prevent actual connections during tests."""
-    with (
-        patch(
-            "infrastructure.cache.redis_client.RedisClient", autospec=True
-        ) as mock_class,
-        patch("core.container.RedisClient", new=mock_class),
-    ):
-        # Ensure get_instance returns a mock instance
-        mock_instance = MagicMock()
-        mock_instance.ping.return_value = True
-        mock_instance.get.return_value = None
-        mock_instance.setex.return_value = True
-        mock_instance.exists.return_value = False
-        mock_class.get_instance.return_value = mock_instance
-        yield mock_class
+def mock_chat_service():
+    return SimpleChatServiceMock()
 
 
 @pytest.fixture
-def mock_redis(mock_redis_client_class) -> MagicMock:
-    """Provide the *instance* of the mocked Redis client."""
-    return mock_redis_client_class.get_instance()
+def mock_sync_service():
+    return SimpleSyncServiceMock()
 
 
 @pytest.fixture
-def mock_cache_wrapper(mock_redis) -> MagicMock:
-    """Provide mock CacheWithFallback."""
-    cache_mock = MagicMock()
-    # 模拟 CacheWithFallback 的行为
-    cache_mock.get.side_effect = mock_redis.get
-    cache_mock.setex.side_effect = mock_redis.setex
-    cache_mock.exists.side_effect = mock_redis.exists
-    return cache_mock
+def mock_audio_service():
+    return SimpleAudioServiceMock()
 
 
-# =============================================================================
-# Test Client Fixtures (Core Logic)
-# =============================================================================
+@pytest.fixture
+def mock_archive_service():
+    return SimpleArchiveServiceMock()
+
+
+@pytest.fixture
+def mock_redis() -> Mock:
+    mock = Mock()
+    mock.ping.return_value = True
+    return mock
+
+
+@pytest.fixture
+def mock_cache_wrapper() -> Mock:
+    cache = Mock()
+    cache.exists.return_value = True  # 默认存在，防止 404
+    cache.get.return_value = "Mock Content"
+    cache.setex.return_value = True
+    return cache
+
+
+@pytest.fixture
+def mock_container(
+    mocker,
+    mock_settings,
+    mock_redis,
+    mock_cache_wrapper,
+    mock_vector_store,
+    mock_notion_service,
+    mock_chat_service,
+    mock_sync_service,
+    mock_audio_service,
+    mock_archive_service,
+):
+    """Mock 全局容器"""
+    container_mock = Mock()
+
+    # 绑定所有 Fake 对象
+    container_mock.config.return_value = mock_settings
+    container_mock.redis_client.return_value = mock_redis
+    container_mock.cache_wrapper.return_value = mock_cache_wrapper
+
+    container_mock.vector_store.return_value = mock_vector_store
+    container_mock.notion_service.return_value = mock_notion_service
+
+    container_mock.chat_service.return_value = mock_chat_service
+    container_mock.sync_service.return_value = mock_sync_service
+    container_mock.audio_service.return_value = mock_audio_service
+    container_mock.archive_service.return_value = mock_archive_service
+
+    mocker.patch("core.container.container", container_mock)
+    return container_mock
 
 
 @pytest.fixture
 def test_client(
-    mock_settings: Settings,
+    mock_settings,
     mock_notion_service,
     mock_vector_store,
     mock_redis,
     mock_cache_wrapper,
+    mock_chat_service,
+    mock_sync_service,
+    mock_audio_service,
+    mock_archive_service,
 ) -> Generator[TestClient, None, None]:
-    """
-    Provide FastAPI test client with mocked dependencies.
-    """
-    # 🔥 核心修正：覆盖 api.dependencies 中的函数
+    # 覆盖依赖
     app.dependency_overrides[get_settings] = lambda: mock_settings
     app.dependency_overrides[get_notion_service] = lambda: mock_notion_service
     app.dependency_overrides[get_vector_store] = lambda: mock_vector_store
     app.dependency_overrides[get_redis] = lambda: mock_redis
     app.dependency_overrides[get_cache_wrapper] = lambda: mock_cache_wrapper
 
+    app.dependency_overrides[get_chat_service] = lambda: mock_chat_service
+    app.dependency_overrides[get_sync_service] = lambda: mock_sync_service
+    app.dependency_overrides[get_audio_service] = lambda: mock_audio_service
+    app.dependency_overrides[get_archive_service] = lambda: mock_archive_service
+
     with TestClient(app) as client:
         yield client
 
@@ -181,115 +256,10 @@ def test_client(
 
 
 @pytest.fixture
-def test_client_no_auth(mock_settings) -> Generator[TestClient, None, None]:
-    """Provide test client without authentication mocking."""
-    app.dependency_overrides[get_settings] = lambda: mock_settings
-
-    with TestClient(app) as client:
-        yield client
-
-    app.dependency_overrides.clear()
-
-
-# =============================================================================
-# Test Data Fixtures
-# =============================================================================
+def client(test_client):
+    return test_client
 
 
 @pytest.fixture
 def auth_headers(mock_settings) -> dict:
-    """Provide valid authentication headers."""
     return {"Authorization": f"Bearer {mock_settings.API_SECRET}"}
-
-
-@pytest.fixture
-def invalid_auth_headers() -> dict:
-    """Provide invalid authentication headers."""
-    return {"Authorization": "Bearer invalid-token"}
-
-
-@pytest.fixture
-def sample_text() -> str:
-    return "This is a sample document for testing purposes."
-
-
-@pytest.fixture
-def sample_pdf_bytes() -> bytes:
-    """Provide minimal PDF bytes for testing."""
-    return b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/MediaBox [0 0 612 792]\n/Contents 4 0 R\n>>\nendobj\n4 0 obj\n<<\n/Length 44\n>>\nstream\nBT\n/F1 12 Tf\n72 712 Td\n(Test PDF Content)\nTj\nET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f\n0000000010 00000 n\n0000000060 00000 n\n0000000117 00000 n\n0000000216 00000 n\ntrailer\n<<\n/Size 5\n/Root 1 0 R\n>>\nstartxref\n312\n%%EOF"
-
-
-# =============================================================================
-# Utility Fixtures
-# =============================================================================
-
-
-@pytest.fixture
-def temp_dir() -> Generator[str, None, None]:
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield tmpdir
-
-
-# 兼容旧代码的 Marker 配置
-def pytest_configure(config):
-    config.addinivalue_line("markers", "unit: Unit tests")
-    config.addinivalue_line("markers", "integration: Integration tests")
-    config.addinivalue_line("markers", "api: API endpoint tests")
-
-
-# tests/conftest.py (添加到现有内容)
-# === Infrastructure Fixtures ===
-
-
-@pytest.fixture
-def redis_client():
-    """提供 Redis 客户端实例"""
-    from infrastructure.cache.redis_client import RedisClient
-
-    RedisClient.reset()
-
-    with patch("redis.ConnectionPool"):
-        with patch("redis.Redis") as MockRedis:
-            mock_redis_instance = MagicMock()
-            mock_redis_instance.ping.return_value = True
-            MockRedis.return_value = mock_redis_instance
-
-            client = RedisClient.get_instance()
-            yield client
-
-    RedisClient.reset()
-
-
-@pytest.fixture
-def memory_redis():
-    """提供内存 Redis 实例"""
-    from infrastructure.cache.redis_client import InMemoryRedis
-
-    redis = InMemoryRedis()
-    yield redis
-    redis.close()
-
-
-@pytest.fixture
-def cache_wrapper():
-    """提供 CacheWrapper 实例"""
-    from utils.cache_fallback import CacheWrapper
-
-    with patch("infrastructure.cache.redis_client.RedisClient.get_instance"):
-        cache = CacheWrapper()
-        yield cache
-
-
-# === Service Fixtures ===
-
-
-@pytest.fixture
-def mock_container():
-    """提供 Mock 的依赖注入容器"""
-    with patch("core.container.container") as mock:
-        mock.notion_service.return_value = MagicMock()
-        mock.vector_store.return_value = MagicMock()
-        mock.cache.return_value = MagicMock()
-        mock.audio_service.return_value = MagicMock()
-
-        yield mock

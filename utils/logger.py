@@ -1,6 +1,7 @@
 """
 utils/logger.py
 Standard logging configuration for the Notion-Prism-React project.
+修复：添加 setup_logging 函数以支持 server.py 的全局初始化调用。
 """
 
 import logging
@@ -12,7 +13,28 @@ DEFAULT_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
-# Configure root logger
+def setup_logging():
+    """
+    Global logging initialization.
+    Configures the Root Logger so that all subsequent get_logger calls
+    inherit this configuration.
+
+    Used by server.py at startup.
+    """
+    # 使用 basicConfig 配置 Root Logger
+    # 这样所有没有特定 Handler 的子 Logger 都会使用这个配置
+    logging.basicConfig(
+        level=logging.INFO,
+        format=DEFAULT_FORMAT,
+        datefmt=DEFAULT_DATE_FORMAT,
+        stream=sys.stdout,
+    )
+
+    # 可以在这里屏蔽一些嘈杂的第三方库日志
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
 def setup_logger(
     name: str = "notion_prism",
     level: int = logging.INFO,
@@ -21,55 +43,48 @@ def setup_logger(
     stream: Optional[logging.Handler] = None,
 ) -> logging.Logger:
     """
-    Configure and return a logger with the given settings.
+    Configure and return a specific logger with the given settings.
 
     Args:
-        name: Logger name (usually __name__ of the calling module)
-        level: Logging level (default: INFO)
-        format_str: Format string for log messages
-        date_format: Date format for timestamps
-        stream: Optional stream handler (default: sys.stdout)
+        name: Logger name
+        level: Logging level
+        format_str: Format string
+        date_format: Date format
+        stream: Optional handler
 
     Returns:
         Configured logger instance
     """
     logger = logging.getLogger(name)
 
-    # Avoid adding handlers multiple times
+    # Avoid adding handlers multiple times if already configured
     if logger.handlers:
         return logger
 
     logger.setLevel(level)
 
-    # Create formatter
-    formatter = logging.Formatter(format_str, date_format)
+    # Only add handler if verify propagation is not enough
+    # or if we need specific formatting for this logger
+    if not logger.handlers:
+        formatter = logging.Formatter(format_str, date_format)
 
-    # Create console handler
-    if stream is None:
-        stream = logging.StreamHandler(sys.stdout)
+        if stream is None:
+            stream = logging.StreamHandler(sys.stdout)
 
-    stream.setFormatter(formatter)
-    logger.addHandler(stream)
+        stream.setFormatter(formatter)
+        logger.addHandler(stream)
 
-    # Prevent propagation to root logger to avoid duplicate messages
+    # Prevent propagation if we have our own handler attached
+    # to avoid duplicate logs in Root Logger
     logger.propagate = False
 
     return logger
 
 
-# Create default logger for the project
-logger = setup_logger()
-
-
-# Convenience functions for quick imports
 def get_logger(name: str) -> logging.Logger:
-    """Get a logger with the given name."""
-    return setup_logger(name)
-
-
-# Example usage:
-# from utils.logger import get_logger
-# logger = get_logger(__name__)
-#
-# logger.info("This is an info message")
-# logger.error("This is an error message")
+    """
+    Get a logger with the given name.
+    If setup_logging() has been called, this logger will inherit root settings
+    unless setup_logger() is used to customize it.
+    """
+    return logging.getLogger(name)

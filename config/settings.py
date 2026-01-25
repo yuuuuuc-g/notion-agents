@@ -62,7 +62,7 @@ class Settings(BaseSettings):
 
     # === Pydantic 配置 ===
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=True, extra="ignore"
     )
 
 

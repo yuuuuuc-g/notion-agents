@@ -1,127 +1,115 @@
 """
-server.py
-Backend API 入口 (FastAPI)
-重构版本 v4.2.0 - 生产环境就绪 (启用自动同步)
+Biobrain Server Entry Point
+版本：v4.7 (Routes Directory Fix)
+描述：FastAPI 主应用入口。
+修复：修正导入路径以指向 api/routes/ 目录。
 """
 import asyncio
 import logging
-import os
 from contextlib import asynccontextmanager
 
-import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-from starlette.middleware.sessions import SessionMiddleware
 
-from api.dependencies import get_cache_wrapper
-
-# 引入路由模块
-from api.routes import admin, chat, files, system
-
-# 引入核心容器
+from config.settings import SETTINGS
 from core.container import container
+from middleware.bandwidth_limiter import BandwidthLimiterMiddleware
+from middleware.error_handler import global_exception_handler
 
-# 引入中间件和后台任务
-from middleware.error_handler import register_exception_handlers
+# ✅ 新增：导入监控中间件和处理函数
 from middleware.metrics import PrometheusMiddleware, metrics_endpoint
-from services.sync_service import auto_sync_scheduler  # 确保导入了同步调度器
+from services.sync_service import auto_sync_scheduler
+from utils.logger import setup_logging
 
-logger = logging.getLogger(__name__)
+# 1. 路由模块导入 (修正路径：api.routes.*)
+# -------------------------------------------------------------------------
+try:
+    from api.routes.admin import router as admin_router  # api/routes/admin.py
+    from api.routes.chat import router as chat_router  # api/routes/chat.py
+    from api.routes.files import router as files_router  # api/routes/files.py
+    from api.routes.system import router as system_router  # api/routes/system.py
+except ImportError as e:
+    # 打印详细错误以帮助调试
+    import sys
+
+    print(f"❌ 路由导入失败: {e}")
+    print(f"   当前 sys.path: {sys.path[:2]}")
+    raise e
+# -------------------------------------------------------------------------
+
+# 初始化日志
+setup_logging()
+logger = logging.getLogger("biobrain.server")
 
 
-# --- ⏳ 生命周期管理 ---
+# 2. 生命周期管理
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 [System] Starting up...")
+    logger.info("🚀 Biobrain Server starting up...")
 
-    # 1. Redis 连接测试
+    # 连接预热
     try:
-        container.redis_client()
+        _ = container.vector_store().client
+        logger.info("✅ Vector Store connection verified.")
     except Exception as e:
-        logger.critical(f"❌ Redis Init Failed: {e}")
-        raise e
+        logger.error(f"❌ Vector Store connection failed: {e}")
 
-    # 2. 启动健康检查 (Health Check)
-    cache = get_cache_wrapper()
-    health_task = asyncio.create_task(cache.start_health_check())
-
-    # 3. 🟢 [已恢复] 启动 Notion 自动同步任务
-    # 在生产环境中，这是保持数据新鲜的关键
-    config = container.config()
-    sync_task = asyncio.create_task(
-        auto_sync_scheduler(
-            db_id=config.DB_SPANISH_ID,
-            notion_token=config.NOTION_TOKEN,
-            # 注意：传入容器的"获取器"方法，而不是实例本身，防止闭包过早绑定
-            get_vector_store_func=container.vector_store,
-            get_config_func=container.config,
-        )
-    )
-    logger.info("🚀 [System] Background Sync Task started.")
-
+    # 后台同步任务
+    sync_task = asyncio.create_task(auto_sync_scheduler(SETTINGS.DB_SPANISH_ID))
     yield
 
-    logger.info("🛑 [System] Shutting down...")
-
-    # 取消所有后台任务
+    # 关闭清理
+    logger.info("🛑 Biobrain Server shutting down...")
     sync_task.cancel()
-    health_task.cancel()
     try:
         await sync_task
-        await health_task
     except asyncio.CancelledError:
         pass
 
-    # 清理资源
-    from infrastructure.cache.redis_client import RedisClient
 
-    RedisClient.close()
-    logger.info("🛑 [System] Cleanup complete.")
-
-
-# --- 🚀 初始化 APP ---
-settings = container.config()
-
+# 3. App 初始化
 app = FastAPI(
-    title=settings.APP_NAME,
+    title="Biobrain API",
+    version="4.3.0",
+    description="AI Second Brain with Notion & Qdrant Integration",
     lifespan=lifespan,
-    version="4.2.0-Prod",
-    debug=settings.DEBUG,
 )
 
-# === 🔥 一键注册所有异常处理器 ===
-register_exception_handlers(app)
-
-# === 注册路由 ===
-app.add_route("/metrics", metrics_endpoint)  # 监控接口
-app.include_router(chat.router)
-app.include_router(files.router)
-app.include_router(admin.router)
-app.include_router(system.router)
-
-# === 限流器配置 ===
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-
-# === 中间件 ===
-app.add_middleware(SessionMiddleware, secret_key=settings.API_SECRET)
+# 4. 中间件
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(PrometheusMiddleware)  # 监控中间件
+# ✅ 新增：注册 Prometheus 监控中间件
+app.add_middleware(PrometheusMiddleware)
+app.add_middleware(BandwidthLimiterMiddleware, max_bandwidth_mb=50)
 
-# === 静态文件 ===
+# 5. 异常处理
+app.add_exception_handler(Exception, global_exception_handler)
 
-if not os.path.exists(settings.AUDIO_DIR):
-    os.makedirs(settings.AUDIO_DIR)
-app.mount("/audio", StaticFiles(directory=settings.AUDIO_DIR), name="audio")
+# 6. 注册路由
+app.include_router(chat_router, prefix="/api")
+app.include_router(files_router, prefix="/api")
+app.include_router(system_router, prefix="/api")
+app.include_router(admin_router, prefix="/api/admin")
+
+
+# ✅ 新增：注册监控指标接口
+@app.get("/metrics", tags=["System"])
+def metrics(request: Request):
+    return metrics_endpoint(request)
+
+
+# 根路径健康检查
+@app.get("/health", tags=["System"])
+async def root_health_check():
+    return {"status": "healthy", "service": "biobrain-server"}
+
 
 if __name__ == "__main__":
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=settings.DEBUG)
+    import uvicorn
+
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)

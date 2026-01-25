@@ -1,126 +1,103 @@
 """
-services/sync_service.py
-同步服务 - 处理 Notion 数据库与向量库的同步
-重构版 v4.1: 修复计数逻辑 Bug
+tests/services/test_sync_service_coverage.py
+针对 SyncService 的高覆盖率测试
+适配：基于 Simple Class Mock 进行动态方法替换
 """
-import asyncio
-import logging
-import random
-from typing import Any, Dict, Set
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from notion.notion_ops import NotionService
-from vector.doc_store import DOC_STORE
-from vector.vector_store import LevelChunkVectorStore
+import pytest
 
-logger = logging.getLogger(__name__)
+from services.sync_service import SyncService
 
 
-class SyncService:
-    def __init__(
-        self, notion_service: NotionService, vector_store: LevelChunkVectorStore
-    ):
-        self.notion = notion_service
-        self.vector_store = vector_store
-        self.semaphore = asyncio.Semaphore(3)
+@pytest.mark.asyncio
+async def test_process_single_page_retry_logic(mock_container):
+    """测试单个页面同步的重试机制"""
+    # 1. 获取 Fake 实例
+    mock_notion = mock_container.notion_service()
+    mock_vector = mock_container.vector_store()
 
-    async def _process_single_page(
-        self, page: Dict[str, Any], synced_ids: Set[str], domain: str
-    ) -> str:
-        page_id = page["id"]
-        title = page.get("title", "Untitled")
-        is_new = page_id not in synced_ids
+    # 2. 🔥 关键修正：将 Fake 实例的方法替换为 MagicMock
+    # 这样我们需要 side_effect 和 call_count 时才能生效
+    mock_vector.add_memory = MagicMock(
+        side_effect=[
+            Exception("Network Error"),  # 第1次失败
+            Exception("Timeout"),  # 第2次失败
+            True,  # 第3次成功
+        ]
+    )
 
-        for attempt in range(3):
-            try:
-                success = self.vector_store.add_memory(
-                    page_id=page_id,
-                    text=page["content"],
-                    title=title,
-                    domain=domain,
-                    metadata={"source": "notion"},
-                    skip_if_exists=False,
-                )
+    service = SyncService(mock_notion, mock_vector)
 
-                if success:
-                    DOC_STORE.mark_page_synced(page_id, source="notion")
-                    return "new" if is_new else "updated"
-                return "skipped"
+    page_data = {"id": "page_1", "content": "test content", "title": "Test Page"}
+    synced_ids = set()
 
-            except Exception as e:
-                if attempt < 2:
-                    await asyncio.sleep(2 * (attempt + 1))
-                else:
-                    logger.error(f"   ❌ 同步失败 {title}: {e}")
-                    return "failed"
-        return "failed"
+    # 3. 执行
+    # Patch asyncio.sleep 以加速测试
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        result = await service._process_single_page(page_data, synced_ids, "Spanish")
 
-    async def sync_database(
-        self,
-        db_id: str,
-        incremental: bool = False,
-        filter: dict = None,
-        retry_on_rate_limit: bool = False,
-        continue_on_error: bool = False,
-    ) -> Dict[str, Any]:
-        """执行一次完整的数据库同步"""
-        logger.info(f"🔄 [Sync] Starting sync for DB: {db_id}")
-
-        try:
-            synced_ids = DOC_STORE.get_synced_page_ids(source="notion")
-            pages = await asyncio.to_thread(self.notion.fetch_database_content, db_id)
-
-            if not pages:
-                return {
-                    "status": "success",
-                    "synced_count": 0,
-                    "message": "No pages found",
-                }
-
-            stats = {"new": 0, "updated": 0, "failed": 0, "skipped": 0}
-
-            async def bounded_process(page):
-                async with self.semaphore:
-                    await asyncio.sleep(random.uniform(0.1, 0.3))
-                    return await self._process_single_page(page, synced_ids, "Spanish")
-
-            tasks = [bounded_process(page) for page in pages]
-            results = await asyncio.gather(*tasks)
-
-            for res in results:
-                # ✅ 修复点：只统计一次
-                stats[res] = stats.get(res, 0) + 1
-
-            DOC_STORE.update_last_full_sync_time()
-
-            return {
-                "status": "success",
-                "synced_count": stats["new"] + stats["updated"],
-                "failed_count": stats["failed"],
-                "stats": stats,
-            }
-
-        except Exception as e:
-            logger.error(f"❌ Sync Error: {e}")
-            raise e
+    # 4. 验证
+    assert result == "new"
+    # 验证重试逻辑
+    assert mock_vector.add_memory.call_count == 3
 
 
-# 兼容旧调用的辅助函数
-async def auto_sync_scheduler(
-    db_id: str, notion_token: str, get_vector_store_func, get_config_func
-):
-    from core.container import container
+@pytest.mark.asyncio
+async def test_process_single_page_failure(mock_container):
+    """测试重试耗尽后的失败情况"""
+    mock_notion = mock_container.notion_service()
+    mock_vector = mock_container.vector_store()
 
-    service = container.sync_service()
-    await asyncio.sleep(5)
-    while True:
-        try:
-            await service.sync_database(db_id)
-            await asyncio.sleep(7200)
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            await asyncio.sleep(300)
+    # 🔥 替换为总是失败的 Mock
+    mock_vector.add_memory = MagicMock(side_effect=Exception("Fatal Error"))
+
+    service = SyncService(mock_notion, mock_vector)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        result = await service._process_single_page(
+            {"id": "p1", "content": "c"}, set(), "Gen"
+        )
+
+    assert result == "failed"
 
 
-def sync_notion_database(db_id: str, **kwargs):
-    raise NotImplementedError("Use SyncService.sync_database instead")
+@pytest.mark.asyncio
+async def test_sync_database_empty(mock_container):
+    """测试空数据库情况"""
+    mock_notion = mock_container.notion_service()
+
+    # 🔥 替换 fetch_database_content
+    # 注意：sync_database 中使用了 asyncio.to_thread 运行此同步方法
+    mock_notion.fetch_database_content = MagicMock(return_value=[])
+
+    service = SyncService(mock_notion, mock_container.vector_store())
+
+    result = await service.sync_database("db_id")
+    assert result["synced_count"] == 0
+    assert "No pages found" in result["message"]
+
+
+@pytest.mark.asyncio
+async def test_sync_database_concurrency(mock_container):
+    """测试并发同步逻辑"""
+    mock_notion = mock_container.notion_service()
+    mock_vector = mock_container.vector_store()
+
+    # 模拟返回 5 个页面
+    pages = [{"id": f"p{i}", "content": "c", "title": f"t{i}"} for i in range(5)]
+
+    # 🔥 替换方法以支持统计
+    mock_notion.fetch_database_content = MagicMock(return_value=pages)
+    mock_vector.add_memory = MagicMock(return_value=True)
+
+    service = SyncService(mock_notion, mock_vector)
+
+    # 执行同步
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        result = await service.sync_database("db_id")
+
+    assert result["status"] == "success"
+    assert result["synced_count"] == 5
+    # 验证确实调用了 5 次写入
+    assert mock_vector.add_memory.call_count == 5

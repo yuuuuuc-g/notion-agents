@@ -1,7 +1,7 @@
 """
 tests/unit/test_doc_store.py
 测试 vector/doc_store.py (SQLite)
-适配 v4.1: 修复 Teardown 属性错误，放宽返回值检查
+适配 v4.2: 修复方法名变更 (_init_db -> _ensure_integrity_and_init)
 """
 
 import pytest
@@ -18,27 +18,26 @@ class TestDocStore:
         # 使用临时文件路径
         db_path = tmp_path / "test_doc_store.db"
 
-        # 1. 实例化
+        # 1. 实例化 (此时它会连接到默认的生产库)
         store = DocStore()
 
-        # 2. 强行修改路径
-        # 如果之前有打开的连接，尝试关闭（防御性编程）
+        # 2. 强行断开默认连接 (Hack)
         if hasattr(store, "conn") and store.conn:
             try:
                 store.conn.close()
             except Exception:
                 pass
 
+        # 3. 指向新的临时文件
         store.db_path = str(db_path)
 
-        # 3. 初始化 DB
-        # 注意：如果 DocStore 内部是用 context manager 管理连接的，这里可能只是建表
-        store._init_db()
+        # 4. 🔥 修复点：调用新的初始化方法 (原 _init_db 已废弃)
+        # 这会自动创建连接、检查完整性并建表
+        store._ensure_integrity_and_init()
 
         yield store
 
-        # 4. 清理 (Teardown)
-        # ✅ 修复点：先检查有没有 conn 属性，再尝试关闭
+        # 5. 清理 (Teardown)
         if hasattr(store, "conn") and store.conn:
             try:
                 store.conn.close()
@@ -52,11 +51,10 @@ class TestDocStore:
         meta = {"author": "me"}
 
         # Add
-        # ✅ 修复点：不再断言 return True，因为该方法可能默认返回 None
-        # 我们只关心是否报错
+        # 这里的返回值取决于具体实现，我们关注副作用(Side Effect)
         doc_store.add_document(doc_id, content, meta)
 
-        # Get (通过获取结果来验证写入是否成功)
+        # Get
         retrieved = doc_store.get_document(doc_id)
         assert retrieved == content
 
@@ -69,7 +67,7 @@ class TestDocStore:
         ids = doc_store.get_synced_page_ids(source)
         assert page_id not in ids
 
-        # 2. 必须先添加文档
+        # 2. 先添加文档 (模拟真实流程)
         doc_store.add_document(page_id, "Some content", {"title": "Test"})
 
         # 3. 标记同步

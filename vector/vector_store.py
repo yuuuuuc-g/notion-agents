@@ -1,15 +1,14 @@
 """
 vector/vector_store.py
-[Qdrant Hybrid Search Version]
-Phase 2.2 Optimization: 单例模式 + 线程安全懒加载
-✅ 修复 v4.2: 移除 API 硬阈值，增加分数调试日志，动态过滤结果 (Threshold = 0.52)
+[Qdrant Hybrid Search Native Version]
+版本：v5.1 (Fix FusionQuery Param)
+修复：models.FusionQuery 参数名从 method 修正为 fusion
 """
 
 import os
 import threading
-import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -18,27 +17,26 @@ from utils.logger import get_logger
 
 from .doc_store import DOC_STORE
 from .embedding_provider import SiliconFlowEmbedding
-from .splitter import split_text
+from .hierarchical_chunker import HierarchicalChunk, HierarchicalChunker
 from .vector_interface import IVectorStore
+
+# 尝试导入稀疏向量模型
+try:
+    from fastembed import SparseTextEmbedding
+
+    SPARSE_MODEL_AVAILABLE = True
+except ImportError:
+    SPARSE_MODEL_AVAILABLE = False
 
 logger = get_logger(__name__)
 
-# 📉 相似度阈值设定
-# 0.42 是无关内容的典型分数 (如 DeepSeek vs 西语)
-# 0.50 是弱相关
-# 0.55 是中等相关 (如 tanto...como...)
-# 0.60+ 是强相关
-# 我们设置为 0.52，既能过滤掉明显的噪音，又能保留语义相关的结果
-SCORE_THRESHOLD = 0.52
+# 默认稀疏模型
+SPARSE_MODEL_NAME = "prithivida/Splade_PP_en_v1"
 
 
 class LevelChunkVectorStore(IVectorStore):
     """
-    基于 Qdrant 实现的混合检索向量存储
-    特性：
-    1. 单例模式 (Singleton)
-    2. 懒加载 (Lazy Loading)
-    3. 线程安全初始化
+    升级版向量存储 (Singleton + Hybrid)
     """
 
     _instance = None
@@ -46,7 +44,6 @@ class LevelChunkVectorStore(IVectorStore):
     _init_lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
-        """单例模式：确保全局只有一个实例"""
         if cls._instance is None:
             with cls._init_lock:
                 if cls._instance is None:
@@ -54,9 +51,6 @@ class LevelChunkVectorStore(IVectorStore):
         return cls._instance
 
     def __init__(self, collection_name: str = None):
-        """
-        轻量级初始化：只设置配置，不建立连接
-        """
         if self._initialized:
             return
 
@@ -64,23 +58,28 @@ class LevelChunkVectorStore(IVectorStore):
             if self._initialized:
                 return
 
-            self.collection_name_config = collection_name or os.getenv(
-                "QDRANT_COLLECTION", "biobrain_memories"
+            self.collection_name = collection_name or os.getenv(
+                "QDRANT_COLLECTION", "biobrain_memory_hybrid"
             )
             self.host = os.getenv("QDRANT_HOST", "localhost")
             self.port = int(os.getenv("QDRANT_PORT", 6333))
 
             self._client: Optional[QdrantClient] = None
-            self._embedding_func = None
+            self._embedding_provider = None
+            self._sparse_embedding_model = None
+            self._chunker = None
+            self.chunk_cache: Dict[str, HierarchicalChunk] = {}
 
             self._initialized = True
-            logger.info("💤 Vector Store initialized (Lazy Mode). Connection deferred.")
+            logger.info("💤 [VectorStore] Initialized (Lazy Mode).")
+
+            if not SPARSE_MODEL_AVAILABLE:
+                logger.warning(
+                    "⚠️ 'fastembed' not installed. Hybrid search (Sparse) will be disabled."
+                )
 
     @property
     def client(self) -> QdrantClient:
-        """
-        懒加载属性：真正需要用的时候才连接数据库
-        """
         if self._client is None:
             with self._init_lock:
                 if self._client is None:
@@ -88,85 +87,96 @@ class LevelChunkVectorStore(IVectorStore):
         return self._client
 
     @property
-    def embedding_func(self):
-        """懒加载 Embedding 模型"""
-        if self._embedding_func is None:
+    def embedding_provider(self):
+        if self._embedding_provider is None:
             with self._init_lock:
-                if self._embedding_func is None:
-                    self._embedding_func = SiliconFlowEmbedding()
-        return self._embedding_func
+                if self._embedding_provider is None:
+                    self._embedding_provider = SiliconFlowEmbedding()
+        return self._embedding_provider
+
+    @property
+    def sparse_model(self):
+        if not SPARSE_MODEL_AVAILABLE:
+            return None
+
+        if self._sparse_embedding_model is None:
+            with self._init_lock:
+                if self._sparse_embedding_model is None:
+                    logger.info(f"⏳ Loading Sparse Model: {SPARSE_MODEL_NAME}...")
+                    try:
+                        self._sparse_embedding_model = SparseTextEmbedding(
+                            model_name=SPARSE_MODEL_NAME
+                        )
+                        logger.info("✅ Sparse Model loaded.")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to load Sparse Model: {e}")
+                        return None
+        return self._sparse_embedding_model
+
+    @property
+    def chunker(self):
+        if self._chunker is None:
+            with self._init_lock:
+                if self._chunker is None:
+                    self._chunker = HierarchicalChunker()
+        return self._chunker
 
     def _connect(self):
-        """执行真实的连接逻辑"""
         logger.info(f"🚀 Connecting to Qdrant at {self.host}:{self.port}...")
         try:
             client = QdrantClient(host=self.host, port=self.port)
-            self._ensure_collection(client, self.collection_name_config)
+            self._ensure_collection(client)
             self._client = client
             logger.info("✅ Qdrant Connection Established.")
         except Exception as e:
             logger.critical(f"❌ Qdrant Connection Failed: {e}")
             raise e
 
-    def _ensure_collection(self, client: QdrantClient, collection_name: str):
-        """初始化 Collection 结构"""
+    def _ensure_collection(self, client: QdrantClient):
         try:
             collections = client.get_collections().collections
-            exists = any(c.name == collection_name for c in collections)
+            exists = any(c.name == self.collection_name for c in collections)
 
             if not exists:
-                logger.info(f"✨ Creating Qdrant collection: {collection_name}")
-                client.create_collection(
-                    collection_name=collection_name,
-                    # BGE-M3 向量维度 1024
-                    vectors_config=models.VectorParams(
+                logger.info(f"✨ Creating Hybrid Collection: {self.collection_name}")
+
+                vectors_config = {
+                    "dense": models.VectorParams(
                         size=1024, distance=models.Distance.COSINE
-                    ),
-                    # HNSW 索引优化
-                    hnsw_config=models.HnswConfigDiff(m=16, ef_construct=100),
+                    )
+                }
+
+                sparse_vectors_config = None
+                if SPARSE_MODEL_AVAILABLE:
+                    sparse_vectors_config = {
+                        "sparse": models.SparseVectorParams(
+                            index=models.SparseIndexParams(
+                                on_disk=False,
+                            )
+                        )
+                    }
+
+                client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=vectors_config,
+                    sparse_vectors_config=sparse_vectors_config,
+                    hnsw_config=models.HnswConfigDiff(m=16, ef_construct=200),
                 )
 
-                # 全文索引
                 client.create_payload_index(
-                    collection_name=collection_name,
-                    field_name="snippet",
-                    field_schema=models.TextIndexParams(
-                        type="text",
-                        tokenizer=models.TokenizerType.MULTILINGUAL,
-                        lowercase=True,
-                    ),
-                )
-                # Domain 索引
-                client.create_payload_index(
-                    collection_name=collection_name,
+                    collection_name=self.collection_name,
                     field_name="domain",
                     field_schema="keyword",
                 )
+                client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="page_id",
+                    field_schema="keyword",
+                )
+
         except Exception as e:
             logger.error(f"❌ Collection setup failed: {e}")
             raise e
-
-    def page_exists(self, page_id: str) -> bool:
-        """检查页面是否存在"""
-        try:
-            if not DOC_STORE.get_document(page_id):
-                return False
-
-            results = self.client.scroll(
-                collection_name=self.collection_name_config,
-                scroll_filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="parent_id", match=models.MatchValue(value=page_id)
-                        )
-                    ]
-                ),
-                limit=1,
-            )
-            return len(results[0]) > 0
-        except Exception as e:
-            logger.warning(f"⚠️ Check page existence error: {e}")
-            return False
 
     def add_memory(
         self,
@@ -177,89 +187,102 @@ class LevelChunkVectorStore(IVectorStore):
         domain: str = None,
         metadata: Optional[Dict[str, Any]] = None,
         skip_if_exists: bool = False,
+        notion_blocks: Optional[List[Dict]] = None,
     ) -> bool:
-        if not text or len(text.strip()) < 10:
+        if not text or len(text.strip()) < 5:
             return False
 
-        final_metadata = dict(metadata) if metadata else {}
-        final_title = title or final_metadata.get("title") or "Untitled"
-        final_domain = domain or final_metadata.get("domain") or "General"
+        final_title = title or (metadata or {}).get("title", "Untitled")
+        final_domain = domain or (metadata or {}).get("domain", "General")
 
         if skip_if_exists and self.page_exists(page_id):
-            logger.info(f"⏭️ 页面已存在，跳过: {final_title}")
+            logger.info(f"⏭️ Page exists, skipping: {final_title}")
             return False
-
-        # 1. 存父文档 (SQLite)
-        DOC_STORE.add_document(
-            doc_id=page_id,
-            content=text,
-            metadata={"title": final_title, "domain": final_domain},
-        )
-
-        # 2. 切分 Children
-        chunks = split_text(text)
-        if not chunks:
-            return False
-
-        # 3. 批量写入 Qdrant
-        points = []
-        for i, chunk_text in enumerate(chunks):
-            # 限流保护
-            time.sleep(2.0)
-
-            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{page_id}_chunk_{i}"))
-            embed_input = f"Title: {final_title}\nContent: {chunk_text}"
-            vector = self.embedding_func.embed_query(embed_input)
-
-            # 容错保护
-            if not vector or len(vector) != 1024:
-                logger.warning("⚠️ 向量维度异常，重试中...")
-                time.sleep(10.0)
-                vector = self.embedding_func.embed_query(embed_input)
-                if not vector or len(vector) != 1024:
-                    logger.error(f"❌ 跳过无效片段 {i}")
-                    continue
-
-            points.append(
-                models.PointStruct(
-                    id=point_id,
-                    vector=vector,
-                    payload={
-                        "parent_id": page_id,
-                        "chunk_index": i,
-                        "title": final_title,
-                        "domain": final_domain,
-                        "snippet": chunk_text,
-                    },
-                )
-            )
 
         try:
-            if not points:
-                logger.error("❌ 未生成有效向量点")
+            DOC_STORE.add_document(
+                doc_id=page_id,
+                content=text,
+                metadata={"title": final_title, "domain": final_domain},
+            )
+
+            if notion_blocks:
+                chunks = self.chunker.chunk_notion_blocks(
+                    notion_blocks, page_id, final_title
+                )
+            else:
+                from .hierarchical_chunker import chunk_markdown_hierarchically
+
+                chunks = chunk_markdown_hierarchically(text, page_id, final_title)
+
+            if not chunks:
                 return False
 
-            # 清理旧数据
+            for chunk in chunks:
+                self.chunk_cache[chunk.chunk_id] = chunk
+
+            points = []
+            contents = [c.content for c in chunks]
+
+            # 兼容处理 Embedding 批量接口
+            try:
+                dense_vectors = self.embedding_provider.embed_documents(contents)
+            except AttributeError:
+                dense_vectors = [
+                    self.embedding_provider.embed_query(c) for c in contents
+                ]
+
+            sparse_vectors = []
+            if self.sparse_model:
+                sparse_vectors = list(self.sparse_model.embed(contents))
+
+            for i, chunk in enumerate(chunks):
+                vector_dict = {"dense": dense_vectors[i]}
+
+                if self.sparse_model and i < len(sparse_vectors):
+                    vector_dict["sparse"] = models.SparseVector(
+                        indices=sparse_vectors[i].indices.tolist(),
+                        values=sparse_vectors[i].values.tolist(),
+                    )
+
+                points.append(
+                    models.PointStruct(
+                        id=str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk.chunk_id)),
+                        vector=vector_dict,
+                        payload={
+                            "chunk_id": chunk.chunk_id,
+                            "page_id": page_id,
+                            "content": chunk.content,
+                            "title": final_title,
+                            "domain": final_domain,
+                            "level": chunk.level,
+                            "parent_id": chunk.parent_id,
+                            "children_ids": chunk.children_ids,
+                            "metadata": metadata or {},
+                        },
+                    )
+                )
+
             self.client.delete(
-                collection_name=self.collection_name_config,
+                collection_name=self.collection_name,
                 points_selector=models.FilterSelector(
                     filter=models.Filter(
                         must=[
                             models.FieldCondition(
-                                key="parent_id", match=models.MatchValue(value=page_id)
+                                key="page_id", match=models.MatchValue(value=page_id)
                             )
                         ]
                     )
                 ),
             )
 
-            self.client.upsert(
-                collection_name=self.collection_name_config, points=points
-            )
-            logger.info(f"✅ Indexed {len(points)} chunks: {final_title}")
+            self.client.upsert(collection_name=self.collection_name, points=points)
+
+            logger.info(f"✅ Added {len(points)} chunks (Hybrid) for: {final_title}")
             return True
+
         except Exception as e:
-            logger.error(f"❌ Qdrant upload failed: {e}")
+            logger.error(f"❌ Add memory failed: {e}")
             return False
 
     def search_memory(
@@ -267,18 +290,35 @@ class LevelChunkVectorStore(IVectorStore):
         query_text: str,
         n_results: int = 3,
         domain: Optional[str] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
-        if not query_text or len(query_text.strip()) < 2:
+        results = self.search_with_context(query_text, top_k=n_results, domain=domain)
+
+        if not results["match"] or not results["results"]:
             return {"match": False}
 
-        logger.info(f"🔍 [Hybrid Search] Query: {query_text}")
+        top_item = results["results"][0]
+
+        return {
+            "match": True,
+            "title": top_item.get("title"),
+            "page_id": top_item.get("page_id"),
+            "snippet": top_item.get("content"),
+            "content": top_item.get("full_context", top_item.get("content")),
+            "score": top_item.get("score"),
+            "metadata": top_item.get("metadata"),
+        }
+
+    def search_with_context(
+        self, query: str, top_k: int = 5, domain: Optional[str] = None
+    ) -> Dict[str, Any]:
+        if not query or len(query.strip()) < 2:
+            return {"match": False, "results": []}
 
         try:
-            query_vector = self.embedding_func.embed_query(query_text)
-
-            search_filter = None
+            query_filter = None
             if domain and domain != "All":
-                search_filter = models.Filter(
+                query_filter = models.Filter(
                     must=[
                         models.FieldCondition(
                             key="domain", match=models.MatchValue(value=domain)
@@ -286,63 +326,139 @@ class LevelChunkVectorStore(IVectorStore):
                     ]
                 )
 
-            # 🔥 1. 移除 score_threshold，获取原始结果
-            response = self.client.query_points(
-                collection_name=self.collection_name_config,
-                query=query_vector,
-                query_filter=search_filter,
-                limit=n_results,
-                with_payload=True,
-                # score_threshold=0.65,  <-- 已移除硬编码阈值
-            )
+            dense_query = self.embedding_provider.embed_query(query)
 
-            results = response.points
+            prefetch = []
 
-            if not results:
-                logger.info("   ℹ️ No results found (Raw).")
-                return {"match": False}
-
-            best_hit = results[0]
-            best_dist = best_hit.score
-            payload = best_hit.payload
-
-            # 🔥 2. 打印真实分数，方便调试
-            logger.info(
-                f"   🎯 Raw Match: {payload.get('title')} (Score: {best_dist:.4f})"
-            )
-
-            # 🔥 3. 手动应用更合理的阈值 (0.52)
-            if best_dist < SCORE_THRESHOLD:
-                logger.info(
-                    f"   🗑️ Filtered out: Score {best_dist:.4f} < Threshold {SCORE_THRESHOLD}"
+            prefetch.append(
+                models.Prefetch(
+                    query=dense_query,
+                    using="dense",
+                    limit=top_k * 2,
+                    filter=query_filter,
                 )
-                return {"match": False}
+            )
 
-            logger.info("   ✅ Match Accepted.")
+            if self.sparse_model:
+                sparse_query_list = list(self.sparse_model.embed([query]))
+                if sparse_query_list:
+                    sparse_vec = models.SparseVector(
+                        indices=sparse_query_list[0].indices.tolist(),
+                        values=sparse_query_list[0].values.tolist(),
+                    )
+                    prefetch.append(
+                        models.Prefetch(
+                            query=sparse_vec,
+                            using="sparse",
+                            limit=top_k * 2,
+                            filter=query_filter,
+                        )
+                    )
 
-            parent_id = payload.get("parent_id")
-            from .doc_store import DOC_STORE
+            if len(prefetch) > 1:
+                # ✅ 修复：参数名从 method 改为 fusion
+                query_struct = models.FusionQuery(
+                    fusion=models.Fusion.RRF,
+                )
+            else:
+                query_struct = dense_query
 
-            full_content = DOC_STORE.get_document(parent_id)
+            response = self.client.query_points(
+                collection_name=self.collection_name,
+                prefetch=prefetch if len(prefetch) > 1 else None,
+                query=query_struct,
+                limit=top_k,
+                with_payload=True,
+            )
+
+            points = response.points
+
+            if not points:
+                return {"match": False, "results": []}
+
+            results_with_context = []
+            for point in points:
+                payload = point.payload
+                chunk_id = payload.get("chunk_id")
+
+                chunk_obj = self.chunk_cache.get(chunk_id)
+                full_context = payload.get("content")
+
+                if chunk_obj:
+                    chunk_data = self.chunker.get_chunk_with_context(
+                        chunk_id, include_parent=True, include_children=True
+                    )
+                    if chunk_data:
+                        full_context = chunk_data.get("full_context")
+
+                results_with_context.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "page_id": payload.get("page_id"),
+                        "title": payload.get("title"),
+                        "content": payload.get("content"),
+                        "full_context": full_context,
+                        "score": point.score,
+                        "level": payload.get("level"),
+                        "metadata": payload.get("metadata"),
+                    }
+                )
+
+            diversity = 0.0
+            if results_with_context:
+                unique_pages = len(set(r["page_id"] for r in results_with_context))
+                diversity = unique_pages / len(results_with_context)
 
             return {
                 "match": True,
-                "page_id": parent_id,
-                "title": payload.get("title"),
-                "distance": best_dist,
-                "metadata": {
-                    "summary": "Retrieved via Qdrant query_points",
-                    "content": full_content or payload.get("snippet"),
-                    "matched_snippet": payload.get("snippet"),
-                },
+                "results": results_with_context,
+                "diversity": diversity,
+                "query_mode": "hybrid" if self.sparse_model else "dense_only",
             }
 
         except Exception as e:
-            logger.error(f"❌ Search Error: {e}")
-            return {"match": False}
+            logger.error(f"❌ Hybrid Search Failed: {e}")
+            return {"match": False, "results": []}
+
+    def page_exists(self, page_id: str) -> bool:
+        try:
+            res = self.client.scroll(
+                self.collection_name,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="page_id", match=models.MatchValue(value=page_id)
+                        )
+                    ]
+                ),
+                limit=1,
+            )
+            return len(res[0]) > 0
+        except Exception:
+            return False
+
+    def delete_page(self, page_id: str) -> bool:
+        try:
+            self.client.delete(
+                self.collection_name,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="page_id", match=models.MatchValue(value=page_id)
+                            )
+                        ]
+                    )
+                ),
+            )
+            DOC_STORE.delete_document(page_id)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete {page_id}: {e}")
+            return False
 
 
-# 导出兼容实例
 _default_store = LevelChunkVectorStore()
 add_memory = _default_store.add_memory
 search_memory = _default_store.search_memory
+search_with_context = _default_store.search_with_context

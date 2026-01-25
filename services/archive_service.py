@@ -43,6 +43,7 @@ class ArchiveService:
                 f"https://notion.so/{notion_id.replace('-', '')}" if notion_id else ""
             )
 
+            # vector_store.add_memory 接口在 v5 Merged 版本中保持兼容
             success = self.vector_store.add_memory(
                 page_id=notion_id,
                 text=full_text,
