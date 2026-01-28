@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 
 // --- 类型定义 ---
 export interface Message {
@@ -14,25 +14,34 @@ export interface Message {
 }
 
 // --- 常量配置 ---
+// API_URL 仅用于拼接音频链接等静态资源，API 请求统一走相对路径
 const API_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
 const API_SECRET = process.env.NEXT_PUBLIC_API_SECRET;
 const MODEL_NAME = "deepseek-ai/DeepSeek-V3";
 
-export function useBioBrain() {
+export function useBioBrain(initialFileId?: string) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [fileId, setFileId] = useState<string | null>(null);
+  const [fileId, setFileId] = useState<string | null>(initialFileId || null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  // 发送消息核心逻辑
+  // 1. 发送消息核心逻辑
   const sendMessage = useCallback(async (query: string) => {
     if (!query.trim() || isLoading) return;
 
-    // 1. 乐观更新 UI
+    // 乐观更新 UI
     setMessages((prev) => [...prev, { role: "user", content: query }, { role: "assistant", content: "" }]);
     setIsLoading(true);
 
+    // 中断上一次请求
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+
     try {
-      const res = await fetch(`${API_URL}/chat`, {
+      // 🔥 修复 1: 使用相对路径 /api/chat，走 Next.js 代理
+      const res = await fetch(`/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -44,9 +53,14 @@ export function useBioBrain() {
           file_id: fileId,
           model_name: MODEL_NAME
         }),
+        signal: abortControllerRef.current.signal,
       });
 
-      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Server returned ${res.status}: ${errText}`);
+      }
+
       if (!res.body) return;
 
       const reader = res.body.getReader();
@@ -63,15 +77,16 @@ export function useBioBrain() {
         const chunkValue = decoder.decode(value, { stream: true });
         aiResponse += chunkValue;
 
-        // ⚡️ 优化：提取音频 URL
+        // 解析音频 URL
         if (!parsedAudioUrl) {
           const audioMatch = aiResponse.match(/\[AUDIO_URL:\s*(audio_[a-f0-9]+\.mp3)\]/i);
           if (audioMatch) {
-            parsedAudioUrl = `${API_URL}/audio/${audioMatch[1]}`;
+            // 这里保留 API_URL，因为是生成的静态资源链接，浏览器直接访问
+            parsedAudioUrl = `${API_URL}/generated_audio/${audioMatch[1]}`;
           }
         }
 
-        // ⚡️ 优化：提取元数据
+        // 解析元数据
         if (!parsedMetadata) {
           const metaMatch = aiResponse.match(/\[KNOWLEDGE_META:\s*({[\s\S]*?})\]/i);
           if (metaMatch) {
@@ -83,21 +98,20 @@ export function useBioBrain() {
           }
         }
 
-        // 实时更新 UI (深度清洗)
+        // 实时更新 UI
         setMessages((prev) => {
           const newMessages = [...prev];
           const lastMsg = newMessages[newMessages.length - 1];
           if (lastMsg.role === "assistant") {
-            // 🔥 核心修改：不仅移除标签，还移除生成提示语
+            // 清洗内容
             let cleanContent = aiResponse
-              .replace(/\[KNOWLEDGE_META:[\s\S]*?\]/g, "") // 移除元数据标签
-              .replace(/\[AUDIO_URL:.*?\]/g, "")            // 移除音频标签
-              .replace(/✅\s*(Audio generated|音频已生成).*?Path:.*?mp3/gi, "") // 移除英文/中文提示语
-              .replace(/✅\s*(Audio generated|音频已生成).*?(\n|$)/gi, "")       // 移除简短提示
+              .replace(/\[KNOWLEDGE_META:[\s\S]*?\]/g, "")
+              .replace(/\[AUDIO_URL:.*?\]/g, "")
+              .replace(/✅\s*(Audio generated|音频已生成).*?Path:.*?mp3/gi, "")
+              .replace(/✅\s*(Audio generated|音频已生成).*?(\n|$)/gi, "")
               .trim();
 
             lastMsg.content = cleanContent;
-
             if (parsedAudioUrl) lastMsg.audioUrl = parsedAudioUrl;
             if (parsedMetadata) lastMsg.knowledgeContext = parsedMetadata;
           }
@@ -105,21 +119,23 @@ export function useBioBrain() {
         });
       }
 
-    } catch (error) {
+    } catch (error: any) {
+      if (error.name === 'AbortError') return;
       console.error("Chat Error:", error);
       setMessages(prev => {
           const list = [...prev];
           if (list.length > 0 && list[list.length - 1].role === 'assistant') {
-              list[list.length - 1].content += "\n\n⚠️ *Connection interrupted.*";
+              list[list.length - 1].content += `\n\n⚠️ *Error: ${error.message}*`;
           }
           return list;
       });
     } finally {
       setIsLoading(false);
+      abortControllerRef.current = null;
     }
   }, [fileId, isLoading]);
 
-  // 文件上传逻辑
+  // 2. 文件上传逻辑
   const uploadFiles = useCallback(async (files: File[]) => {
     const formData = new FormData();
     files.forEach(file => formData.append("files", file));
@@ -127,10 +143,24 @@ export function useBioBrain() {
     setMessages(prev => [...prev, { role: "assistant", content: "🔄 Syncing neural context..." }]);
 
     try {
-      const res = await fetch(`${API_URL}/upload`, {
+      // 🔥 修复 2: 使用相对路径 /api/upload
+      // 原代码使用的是 ${API_URL}/upload，这会导致直接连 localhost:8000 从而 404
+      // 这里的 /api/upload 会被 Next.js 代理转发到后端的 /api/upload
+      const res = await fetch(`/api/upload`, {
         method: "POST",
+        headers: {
+          // 🔥 修复 3: 添加鉴权头 (原代码缺失)
+          "Authorization": `Bearer ${API_SECRET}`
+          // 注意：不要手动设置 Content-Type，fetch 会自动设置 multipart/form-data boundary
+        },
         body: formData,
       });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`Upload failed ${res.status}: ${errText}`);
+      }
+
       const data = await res.json();
 
       if (data.status === "success") {
@@ -141,10 +171,11 @@ export function useBioBrain() {
            return list;
         });
       }
-    } catch (e) {
+    } catch (e: any) {
+      console.error("Upload Error:", e);
       setMessages(prev => {
         const list = [...prev];
-        list[list.length - 1].content = "❌ Context sync failed.";
+        list[list.length - 1].content = `❌ Context sync failed: ${e.message}`;
         return list;
      });
     }

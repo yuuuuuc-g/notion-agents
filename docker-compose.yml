@@ -1,4 +1,3 @@
-
 services:
   # 1. 向量数据库
   qdrant:
@@ -14,18 +13,20 @@ services:
     restart: always
 
   # 2. 后端服务 (FastAPI)
-  biobrain:  # 👈 这是服务名
+  biobrain:
     build: .
-    container_name: biobrain_backend # 👈 这是容器名，更清晰
+    container_name: biobrain_backend
     ports:
       - "8000:8000"
     env_file: .env
     environment:
-      - REDIS_HOST=redis
+      # 使用容器名作为 Host，确保 Docker 内部网络互通
+      - REDIS_HOST=exocortex_redis
       - REDIS_PORT=6379
-      - QDRANT_HOST=qdrant
+      - QDRANT_HOST=biobrain_qdrant
       - QDRANT_PORT=6333
     volumes:
+      # 后端挂载根目录是正确的，因为 server.py 在根目录
       - ./chroma_db:/app/chroma_db
       - ./generated_audio:/app/generated_audio
       - .:/app
@@ -45,17 +46,27 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - .:/app
+      # 🔥 核心修复：只挂载 web 目录到容器的 /app
+      # 这样 npm run dev 才会读取 web/package.json (执行 next dev)
+      - ./web:/app
+
+      # 保留容器内构建好的 node_modules，防止被宿主机覆盖
       - /app/node_modules
     networks:
       - exocortex_net
     restart: unless-stopped
     environment:
+      # 浏览器访问地址
       - NEXT_PUBLIC_BACKEND_URL=http://localhost:8000
+      # 传递 API Key
+      - API_SECRET=${API_SECRET}
+      # Docker 内部通信地址 (Next.js -> FastAPI)
+      - API_BASE_URL=http://biobrain_backend:8000
 
   # 4. 缓存服务
   redis:
     image: redis:alpine
+    # 这里的 command 使用了环境变量，请确保 .env 中有 REDIS_PASSWORD
     command: redis-server --requirepass ${REDIS_PASSWORD}
     container_name: exocortex_redis
     volumes:

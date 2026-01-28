@@ -50,7 +50,7 @@ class SiliconFlowEmbedding:
         🔥 修复核心：增加分批逻辑，防止触发 413 (Max batch size 64)
         """
         all_embeddings = []
-        BATCH_SIZE = 50  # 保险起见，设为 50 (上限是 64)
+        BATCH_SIZE = 30  # 保险起见，设为 50 (上限是 64)
 
         # 将 texts 列表切分成多个小批次
         batches = [texts[i : i + BATCH_SIZE] for i in range(0, len(texts), BATCH_SIZE)]

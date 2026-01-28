@@ -1,20 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// Get backend URL and secret from environment variables
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+// 1. 后端地址配置
+const BACKEND_HOST = process.env.API_BASE_URL || 'http://biobrain_backend:8000';
 const API_SECRET = process.env.API_SECRET;
 
 if (!API_SECRET) {
-  throw new Error('API_SECRET environment variable is not set in Next.js');
+  console.error('API_SECRET environment variable is not set in Next.js');
 }
 
 export async function POST(req: NextRequest) {
   try {
-    // Get form data from the request
+    // 获取表单数据
     const formData = await req.formData();
-
-    // 🔒 安全的类型验证：使用 type guard 替代类型断言
     const rawFiles = formData.getAll('files');
+
+    // 🔥 优雅写法回归：Node 20+ 原生支持 File 对象
     const files = rawFiles.filter((f): f is File => f instanceof File);
 
     if (files.length === 0) {
@@ -24,19 +24,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create a new FormData to send to backend
+    // 构建发往后端的 FormData
     const backendFormData = new FormData();
-    files.forEach(file => {
+    files.forEach((file) => {
       backendFormData.append('files', file);
     });
 
-    // Prepare request to backend
-    const backendUrl = `${BACKEND_URL}/upload`;
+    // 2. 拼接 API 路径
+    const backendUrl = `${BACKEND_HOST}/api/upload`;
+    console.log(`🔌 [UploadProxy] Forwarding ${files.length} files to: ${backendUrl}`);
+
     const response = await fetch(backendUrl, {
       method: 'POST',
       headers: {
-        // Note: Don't set Content-Type for FormData, let browser set it with boundary
-        'Authorization': `Bearer ${API_SECRET}`,  // Secret is now server-side only
+        'Authorization': `Bearer ${API_SECRET}`,
       },
       body: backendFormData,
     });
@@ -45,19 +46,19 @@ export async function POST(req: NextRequest) {
       const errorText = await response.text();
       console.error('Backend upload error:', response.status, errorText);
       return NextResponse.json(
-        { error: `Backend error: ${response.status}` },
+        { error: `Backend error: ${response.status} - ${errorText}` },
         { status: response.status }
       );
     }
 
-    // Return the backend response
+    // 返回后端响应
     const data = await response.json();
     return NextResponse.json(data);
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Upload API route error:', error);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: `Upload failed: ${error.message}` },
       { status: 500 }
     );
   }

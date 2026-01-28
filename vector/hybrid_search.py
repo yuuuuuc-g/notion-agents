@@ -9,7 +9,7 @@ vector/hybrid_search.py
 4. 重排序（可选）：使用 Cross-Encoder 提升精度
 """
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -23,14 +23,14 @@ logger = get_logger(__name__)
 class SearchResult:
     """搜索结果数据结构"""
 
-    chunk_id: str  # 分块 ID
-    page_id: str  # 页面 ID
-    content: str  # 文本内容
-    title: str  # 页面标题
-    score: float  # 相似度分数
-    source: str  # 来源：vector/keyword/hybrid
-    level: str  # 层级：chapter/section/paragraph
-    metadata: Dict  # 额外元数据
+    chunk_id: str
+    page_id: str
+    content: str
+    title: str
+    score: float
+    source: str
+    level: str
+    metadata: Dict
 
     def to_dict(self) -> Dict:
         """转换为字典"""
@@ -90,17 +90,6 @@ class HybridSearchEngine:
     ) -> List[SearchResult]:
         """
         混合搜索
-
-        Args:
-            query: 搜索查询
-            top_k: 返回结果数量
-            domain: 领域过滤（如 "Spanish", "Tech"）
-            level_filter: 层级过滤（如只搜索标题）
-            use_reranker: 是否使用重排序模型
-            min_score: 最低分数阈值
-
-        Returns:
-            搜索结果列表
         """
         logger.info(f"🔍 [HybridSearch] Query: '{query}' (top_k={top_k})")
 
@@ -219,16 +208,9 @@ class HybridSearchEngine:
     ) -> List[SearchResult]:
         """
         关键词搜索（通过 Notion API）
-
-        注意：这是一个简化实现，真实场景需要调用 Notion 的 search API
         """
         try:
-            # 调用 Notion API 搜索
-            # notion_results = await self.notion.search(query=query, filter=...)
-
-            # 这里暂时返回空列表，因为 Notion API 的搜索需要特殊配置
-            # 实际使用时，可以通过 notion_service.client.search(...) 调用
-
+            # 调用 Notion API 搜索 (占位实现)
             logger.debug("📊 [KeywordSearch] Skipped (Notion API search not configured)")
             return []
 
@@ -244,16 +226,6 @@ class HybridSearchEngine:
     ) -> List[SearchResult]:
         """
         RRF (Reciprocal Rank Fusion) 融合排序
-
-        公式: RRF_score = Σ 1 / (k + rank_i)
-
-        Args:
-            vector_results: 向量搜索结果
-            keyword_results: 关键词搜索结果
-            top_k: 返回数量
-
-        Returns:
-            融合后的结果
         """
         # 使用 chunk_id 作为唯一标识
         fused_scores: Dict[str, Tuple[SearchResult, float]] = {}
@@ -263,7 +235,6 @@ class HybridSearchEngine:
             rrf_score = self.vector_weight / (self.rrf_k + rank + 1)
 
             if result.chunk_id in fused_scores:
-                # 已存在，累加分数
                 existing_result, existing_score = fused_scores[result.chunk_id]
                 fused_scores[result.chunk_id] = (
                     existing_result,
@@ -283,7 +254,6 @@ class HybridSearchEngine:
                     existing_score + rrf_score,
                 )
             else:
-                # 标记为来自关键词搜索
                 result.source = "keyword"
                 fused_scores[result.chunk_id] = (result, rrf_score)
 
@@ -293,13 +263,11 @@ class HybridSearchEngine:
         # 4. 更新分数和来源
         final_results = []
         for result, fused_score in sorted_results[:top_k]:
-            # 如果同时出现在两个结果中，标记为 hybrid
             if result.source == "vector" and any(
                 kr.chunk_id == result.chunk_id for kr in keyword_results
             ):
                 result.source = "hybrid"
 
-            # 更新为融合分数
             result.score = fused_score
             final_results.append(result)
 
@@ -310,27 +278,18 @@ class HybridSearchEngine:
     ) -> List[SearchResult]:
         """
         使用 Cross-Encoder 重排序
-
-        需要安装: pip install sentence-transformers
         """
         try:
             from sentence_transformers import CrossEncoder
 
-            # 加载重排序模型（首次会下载，约 400MB）
             reranker = CrossEncoder("BAAI/bge-reranker-large")
-
-            # 准备输入对
             pairs = [(query, result.content) for result in candidates]
-
-            # 计算重排序分数
             rerank_scores = reranker.predict(pairs)
 
-            # 按重排序分数排序
             reranked = sorted(
                 zip(candidates, rerank_scores), key=lambda x: x[1], reverse=True
             )
 
-            # 更新分数
             results = []
             for result, score in reranked:
                 result.score = float(score)
@@ -350,17 +309,12 @@ class HybridSearchEngine:
     def search_with_context(
         self,
         results: List[SearchResult],
-        chunk_map: Dict[str, any],  # chunk_id -> HierarchicalChunk
+        chunk_map: Dict[str, Any],  # chunk_id -> HierarchicalChunk
     ) -> List[Dict]:
         """
         为搜索结果添加上下文信息
 
-        Args:
-            results: 搜索结果
-            chunk_map: chunk_id 到 HierarchicalChunk 的映射
-
-        Returns:
-            带上下文的搜索结果
+        Week 6 Agent 强依赖此方法来获取结果并进行分析。
         """
         results_with_context = []
 
@@ -376,7 +330,7 @@ class HybridSearchEngine:
                 parent = chunk_map[chunk.parent_id]
                 parent_text = f"[{parent.level.upper()}] {parent.content}\n\n"
 
-            # 获取子块（如果当前是章节/小节）
+            # 获取子块
             children_text = ""
             if chunk.children_ids:
                 children = [
@@ -402,39 +356,55 @@ class HybridSearchEngine:
         return results_with_context
 
 
-# 辅助函数：计算搜索结果的多样性
-def calculate_diversity(results: List[SearchResult]) -> float:
+# =============================================================================
+# 🔥 辅助函数 (关键修复：兼容 Dict 和 SearchResult)
+# =============================================================================
+
+
+def calculate_diversity(results: List[Union[SearchResult, Dict]]) -> float:
     """
     计算搜索结果的多样性
 
     多样性 = 不同页面数 / 总结果数
-
-    用于判断是否需要向用户澄清（主题分散）
+    🔥 修复：兼容 SearchResult 对象和字典类型访问
     """
     if not results:
         return 0.0
 
-    unique_pages = len(set(r.page_id for r in results))
-    diversity = unique_pages / len(results)
+    unique_pages = set()
+    for r in results:
+        # 兼容性判断：如果是字典用 get，如果是对象用 getattr
+        if isinstance(r, dict):
+            page_id = r.get("page_id")
+        else:
+            page_id = getattr(r, "page_id", None)
 
+        if page_id:
+            unique_pages.add(page_id)
+
+    diversity = len(unique_pages) / len(results)
     return diversity
 
 
-# 辅助函数：主题聚类
 def cluster_by_topic(
-    results: List[SearchResult], top_n_topics: int = 5
-) -> Dict[str, List[SearchResult]]:
+    results: List[Union[SearchResult, Dict]], top_n_topics: int = 5
+) -> Dict[str, List[Union[SearchResult, Dict]]]:
     """
     按主题聚类搜索结果
 
-    简化版：按页面标题聚类
-    高级版：可使用 LLM 提取主题标签
+    🔥 修复：兼容 SearchResult 对象和字典类型访问
     """
-    clusters: Dict[str, List[SearchResult]] = {}
+    clusters: Dict[str, List[Any]] = {}
 
     for result in results:
-        # 使用页面标题作为主题
-        topic = result.title
+        # 兼容性判断
+        if isinstance(result, dict):
+            topic = result.get("title", "Untitled")
+        else:
+            topic = getattr(result, "title", "Untitled")
+
+        if not topic:
+            topic = "Untitled"
 
         if topic not in clusters:
             clusters[topic] = []

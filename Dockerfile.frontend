@@ -1,7 +1,25 @@
-FROM m.daocloud.io/docker.io/library/node:18-alpine
+# Dockerfile.frontend
+# 适用场景：本地开发 (Development)
+# 特性：支持热重载，Node 20 原生支持 File API
+
+# 1. 升级基础镜像到 Node 20 (LTS) 以修复上传报错
+FROM node:20-alpine
+
+# 2. 设置工作目录
 WORKDIR /app
-COPY package*.json ./
+
+# 3. 复制依赖描述文件
+# 注意：docker-compose 的 context 是根目录，所以这里指向 web/
+COPY web/package.json web/package-lock.json* ./
+
+# 4. 安装依赖
 RUN npm install
-COPY . .
+
+# 5. 复制源代码
+COPY web/ .
+
+# 6. 暴露端口
 EXPOSE 3000
+
+# 7. 启动开发服务器 (开启热重载)
 CMD ["npm", "run", "dev"]

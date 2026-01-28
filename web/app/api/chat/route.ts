@@ -1,93 +1,47 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-interface ChatRequest {
-  query: string;
-  thread_id?: string;
-  file_id?: string;
-  model_name?: string;
-}
-
-// Get backend URL and secret from environment variables
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
-const API_SECRET = process.env.API_SECRET;
-
-if (!API_SECRET) {
-  throw new Error('API_SECRET environment variable is not set in Next.js');
-}
-
 export async function POST(req: NextRequest) {
+  // 1. 定义后端地址
+  // 在 Docker 内部，必须使用服务名 "biobrain_backend"
+  // 如果环境变量没设置，默认回退到 http://biobrain_backend:8000
+  const BACKEND_HOST = process.env.API_BASE_URL || 'http://biobrain_backend:8000';
+
+  // 2. 拼接正确的 API 路径
+  // 注意：后端 server.py 挂载在 /api 下，所以路径是 /api/chat
+  const backendUrl = `${BACKEND_HOST}/api/chat`;
+
+  console.log(`🔌 [NextProxy] Forwarding request to: ${backendUrl}`);
+
   try {
-    const body: ChatRequest = await req.json();
+    const body = await req.json();
 
-    // Validate required fields
-    if (!body.query) {
-      return NextResponse.json(
-        { error: 'Query is required' },
-        { status: 400 }
-      );
-    }
-
-    // Prepare request to backend
-    const backendUrl = `${BACKEND_URL}/chat`;
-    const response = await fetch(backendUrl, {
+    // 3. 向 Python 后端发起请求
+    const res = await fetch(backendUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        "Authorization": `Bearer ${process.env.API_SECRET}`,  // Secret is now server-side only
+        // 如果有 API_SECRET，加上认证头
+        ...(process.env.API_SECRET ? { 'Authorization': `Bearer ${process.env.API_SECRET}` } : {}),
       },
       body: JSON.stringify(body),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Backend error:', response.status, errorText);
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.error(`❌ [NextProxy] Backend Error ${res.status}: ${errorText}`);
       return NextResponse.json(
-        { error: `Backend error: ${response.status}` },
-        { status: response.status }
+        { error: `Backend Error: ${errorText}` },
+        { status: res.status }
       );
     }
 
-    if (!response.body) {
-      return NextResponse.json(
-        { error: 'No response body from backend' },
-        { status: 500 }
-      );
-    }
+    // 4. 直接透传流式响应
+    return new NextResponse(res.body);
 
-    // Stream the response from backend to frontend
-    const reader = response.body.getReader();
-
-
-    // Create a ReadableStream for the Next.js response
-    const stream = new ReadableStream({
-      async start(controller) {
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              controller.close();
-              break;
-            }
-            controller.enqueue(value);
-          }
-        } catch (error) {
-          console.error('Stream error:', error);
-          controller.error(error);
-        }
-      },
-    });
-
-    return new NextResponse(stream, {
-      headers: {
-        'Content-Type': 'text/plain',
-        'Transfer-Encoding': 'chunked',
-      },
-    });
-
-  } catch (error) {
-    console.error('API route error:', error);
+  } catch (error: any) {
+    console.error('❌ [NextProxy] Connection Failed:', error);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: `Connection Failed: ${error.message} (Is backend running?)` },
       { status: 500 }
     );
   }

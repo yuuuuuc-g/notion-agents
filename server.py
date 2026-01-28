@@ -4,21 +4,18 @@ Biobrain Server Entry Point
 描述：FastAPI 主应用入口。
 修复：修正导入路径以指向 api/routes/ 目录。
 """
-import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from config.settings import SETTINGS
 from core.container import container
 from middleware.bandwidth_limiter import BandwidthLimiterMiddleware
 from middleware.error_handler import global_exception_handler
 
 # ✅ 新增：导入监控中间件和处理函数
 from middleware.metrics import PrometheusMiddleware, metrics_endpoint
-from services.sync_service import auto_sync_scheduler
 from utils.logger import setup_logging
 
 # 1. 路由模块导入 (修正路径：api.routes.*)
@@ -54,17 +51,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Vector Store connection failed: {e}")
 
-    # 后台同步任务
-    sync_task = asyncio.create_task(auto_sync_scheduler(SETTINGS.DB_SPANISH_ID))
+    # --- 🛑 临时关闭自动同步 (开发模式优化) ---
+    # sync_task = asyncio.create_task(auto_sync_scheduler(SETTINGS.DB_SPANISH_ID))
+    # logger.info("⚠️ Auto-sync scheduler is TEMPORARILY DISABLED.")
+    # ----------------------------------------
+
     yield
 
     # 关闭清理
     logger.info("🛑 Biobrain Server shutting down...")
-    sync_task.cancel()
-    try:
-        await sync_task
-    except asyncio.CancelledError:
-        pass
+
+    # --- 🛑 对应关闭清理逻辑 ---
+    # sync_task.cancel()
+    # try:
+    #     await sync_task
+    # except asyncio.CancelledError:
+    #     pass
+    # -------------------------
 
 
 # 3. App 初始化
@@ -112,4 +115,21 @@ async def root_health_check():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+        # 🔥 关键修复：排除不需要监控的目录和文件
+        # 防止数据库写入或前端构建触发后端重启
+        reload_excludes=[
+            "web/*",  # 忽略前端目录
+            "storage/*",  # 忽略 Qdrant 存储 (如果有)
+            "*.db",  # 忽略 SQLite 数据库
+            "*.sqlite",
+            "*.pyc",
+            ".cache/*",  # 忽略缓存
+            "__pycache__/*",
+            ".git/*",
+        ],
+    )
