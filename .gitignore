@@ -83,3 +83,11 @@ web/build/
 web/.vercel/
 web/*.ts
 buildinfo
+# Qdrant 数据
+# 音频文件
+audio_files/
+# 导出文件
+biobrain_complete_export_*.txt
+# 数据库文件
+*.sqlite
+biobrain_complete_export_*.txt
