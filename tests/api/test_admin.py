@@ -2,6 +2,7 @@
 tests/api/test_admin.py
 测试 Admin 接口
 """
+
 from unittest.mock import AsyncMock
 
 
@@ -27,5 +28,8 @@ def test_sync_notion_no_config(client, mock_container):
     mock_settings.DB_SPANISH_ID = None
 
     response = client.post("/api/admin/sync_notion")
-    assert response.status_code == 200
-    assert response.json()["status"] == "error"
+    assert response.status_code == 400  # BusinessException 返回 400
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["code"] == "CONFIG_ERROR"
+    assert "No DB ID configured" in payload["message"]

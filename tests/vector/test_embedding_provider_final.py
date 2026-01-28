@@ -3,78 +3,57 @@ tests/vector/test_embedding_provider_final.py
 针对 SiliconFlowEmbedding 的高覆盖率测试
 版本：Final (OpenAI Patch) - 直接拦截 OpenAI SDK 调用
 """
+
 import os
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 from vector.embedding_provider import SiliconFlowEmbedding
 
 
-# 模拟一个符合 OpenAI 响应结构的简单类
-class MockEmbeddingData:
-    def __init__(self, embedding, index):
-        self.embedding = embedding
-        self.index = index
-
-
-class MockOpenAIResponse:
-    def __init__(self, data):
-        self.data = data
-
-
 @pytest.fixture
-def mock_openai_client():
+def mock_httpx_post():
     """
-    精准 Mock OpenAI 客户端
-    无论代码通过 'import openai' 还是 'from openai import OpenAI'，
-    只要它实例化客户端，我们就能拦截到。
+    Mock httpx.post 调用，因为 SiliconFlowEmbedding 使用 httpx 而非 OpenAI SDK
     """
-    # 构造假数据
     fake_vector = [0.1] * 1024
-    fake_response = MockOpenAIResponse(
-        data=[
-            MockEmbeddingData(embedding=fake_vector, index=0),
-            MockEmbeddingData(embedding=fake_vector, index=1),
+    fake_response_data = {
+        "data": [
+            {"embedding": fake_vector, "index": 0},
+            {"embedding": fake_vector, "index": 1},
         ]
-    )
+    }
 
-    # 🔥 策略：同时 Patch 两个最可能的导入路径
-    # 1. vector.embedding_provider.OpenAI (如果使用了 from openai import OpenAI)
-    # 2. openai.OpenAI (全局 Patch)
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = fake_response_data
+    mock_response.raise_for_status.return_value = None
 
-    with patch("openai.OpenAI") as MockGlobalOpenAI, patch(
-        "vector.embedding_provider.OpenAI", create=True
-    ) as MockLocalOpenAI:
-        # 统一两个 Mock 的行为
-        mock_instance = MagicMock()
-        mock_instance.embeddings.create.return_value = fake_response
-
-        MockGlobalOpenAI.return_value = mock_instance
-        MockLocalOpenAI.return_value = mock_instance
-
-        # 同时也 Patch 环境变量，防止构造函数检查报错
+    with patch("httpx.post") as mock_post:
+        mock_post.return_value = mock_response
+        # 同时 mock 环境变量
         with patch.dict(
             os.environ,
             {"SILICON_KEY": "sk-test-key", "SILICON_BASE_URL": "https://api.test"},
         ):
-            yield mock_instance.embeddings.create
+            yield mock_post
 
 
-def test_embed_query_success(mock_openai_client):
+def test_embed_query_success(mock_httpx_post):
     """测试单条 Embedding"""
     provider = SiliconFlowEmbedding()
 
-    # 执行真实逻辑，但 create 方法已被 Mock
     vector = provider.embed_query("hello")
 
     assert len(vector) == 1024
     assert vector[0] == 0.1
-    # 验证确实调用了 OpenAI 接口
-    mock_openai_client.assert_called()
+    # 验证调用了 httpx.post
+    mock_httpx_post.assert_called()
 
 
-def test_embed_documents_batch(mock_openai_client):
+def test_embed_documents_batch(mock_httpx_post):
     """测试批量 Embedding"""
     provider = SiliconFlowEmbedding()
 
@@ -83,12 +62,14 @@ def test_embed_documents_batch(mock_openai_client):
     assert len(vectors) == 2
     assert len(vectors[0]) == 1024
     assert vectors[0][0] == 0.1
+    # 批量调用会调用多次 httpx.post
+    assert mock_httpx_post.call_count >= 1
 
 
-def test_api_error_handling(mock_openai_client):
+def test_api_error_handling(mock_httpx_post):
     """测试 API 错误处理"""
-    # 让 Mock 抛出异常
-    mock_openai_client.side_effect = Exception("API Error 401")
+    # 让 httpx.post 抛出异常
+    mock_httpx_post.side_effect = Exception("API Error 401")
 
     provider = SiliconFlowEmbedding()
 

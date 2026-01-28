@@ -22,6 +22,7 @@ from api.dependencies import (
 )
 from middleware.auth import verify_token
 from middleware.bandwidth_limiter import BandwidthLimiter
+from middleware.error_handler import BusinessException
 from services.archive_service import ArchiveService
 from services.file_parser import extract_text_from_upload_file
 from utils.cache_fallback import CacheWithFallback
@@ -72,7 +73,11 @@ async def upload_files(
             raise he
         except Exception as e:
             logger.error(f"Error parsing {file.filename}: {e}")
-            continue
+            raise BusinessException(
+                message=f"Failed to process file '{file.filename}': {str(e)}",
+                code="FILE_PROCESSING_ERROR",
+                status_code=400,
+            )
 
     await bandwidth_limiter.check(client_ip, total_processed_size)
 

@@ -5,13 +5,13 @@ middleware/bandwidth_limiter.py
 1. 核心逻辑 (BandwidthLimiter): 采用你的版本 (defaultdict + 友好报错)
 2. 中间件封装 (BandwidthLimiterMiddleware): 补充缺失的 FastAPI 集成类
 """
+
 import logging
 from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class BandwidthLimiter:
                 wait_seconds = 0
 
             logger.warning(
-                f"⚠️ Bandwidth limit exceeded for IP {client_ip}. Used: {record['bytes']/1024/1024:.2f}MB"
+                f"⚠️ Bandwidth limit exceeded for IP {client_ip}. Used: {record['bytes'] / 1024 / 1024:.2f}MB"
             )
             raise HTTPException(
                 status_code=429,
@@ -94,14 +94,7 @@ class BandwidthLimiterMiddleware(BaseHTTPMiddleware):
                 size = int(content_length)
 
                 # 调用核心逻辑进行检查
-                try:
-                    await self.limiter.check(client_ip, size)
-                except HTTPException as e:
-                    # 如果核心逻辑抛出 HTTP 异常 (429 Too Many Requests)
-                    # 中间件需要捕获它并转化为响应，否则服务器会报 500
-                    return JSONResponse(
-                        status_code=e.status_code, content={"detail": e.detail}
-                    )
+                await self.limiter.check(client_ip, size)
             except ValueError:
                 # Content-Length 格式错误，忽略或记录日志
                 pass

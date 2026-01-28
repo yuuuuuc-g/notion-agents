@@ -2,6 +2,7 @@
 settings.py
 集中化配置管理 - 修复版 v3
 """
+
 import os
 from functools import lru_cache
 from typing import List, Optional
@@ -21,7 +22,6 @@ class Settings(BaseSettings):
     APP_NAME: str = "BioBrain API"
     ENVIRONMENT: str = "development"  # development / production
     DEBUG: bool = True
-    USE_LOCAL_NANOGPT: bool = False
 
     # 🔥 安全核心: API_SECRET
     API_SECRET: str

@@ -141,7 +141,6 @@ def mock_settings() -> Settings:
         DB_SPANISH_ID="mock-spanish-db",
         AUDIO_DIR="./tests/fixtures/audio",
         TTS_RATE="-10%",
-        USE_LOCAL_NANOGPT=False,
     )
 
 

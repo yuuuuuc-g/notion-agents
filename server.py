@@ -4,6 +4,7 @@ Biobrain Server Entry Point
 描述：FastAPI 主应用入口。
 修复：修正导入路径以指向 api/routes/ 目录。
 """
+
 import logging
 from contextlib import asynccontextmanager
 
@@ -12,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.container import container
 from middleware.bandwidth_limiter import BandwidthLimiterMiddleware
-from middleware.error_handler import global_exception_handler
+from middleware.error_handler import register_exception_handlers
 
 # ✅ 新增：导入监控中间件和处理函数
 from middleware.metrics import PrometheusMiddleware, metrics_endpoint
@@ -90,8 +91,8 @@ app.add_middleware(
 app.add_middleware(PrometheusMiddleware)
 app.add_middleware(BandwidthLimiterMiddleware, max_bandwidth_mb=50)
 
-# 5. 异常处理
-app.add_exception_handler(Exception, global_exception_handler)
+# 5. 异常处理 - 注册所有标准异常处理器
+register_exception_handlers(app)
 
 # 6. 注册路由
 app.include_router(chat_router, prefix="/api")

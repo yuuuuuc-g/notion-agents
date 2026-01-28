@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from api.dependencies import get_audio_service, get_cache_wrapper, get_chat_service
 from middleware.auth import verify_token
+from middleware.error_handler import BusinessException
 from services.audio_service import AudioService
 from services.chat_service import ChatService
 from utils.cache_fallback import CacheWithFallback
@@ -35,10 +36,13 @@ async def chat_endpoint(
         if cached_text:
             context = cached_text[:20000]
 
+    model_name = (
+        body.model_name if body.model_name is not None else "deepseek/deepseek-chat"
+    )
     response_stream = chat_service.stream_response(
         query=body.query,
         thread_id=body.thread_id,
-        model_name=body.model_name,
+        model_name=model_name,
         context=context,
     )
     return StreamingResponse(response_stream, media_type="text/plain")
@@ -53,5 +57,7 @@ async def text_to_speech(
     """
     url = await audio_service.generate_audio_file(text)
     if not url:
-        return {"error": "Failed to generate audio"}
+        raise BusinessException(
+            message="Failed to generate audio", code="TTS_ERROR", status_code=500
+        )
     return {"url": url}
