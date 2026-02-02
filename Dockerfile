@@ -24,5 +24,5 @@ RUN chmod +x start.sh
 # 暴露端口
 EXPOSE 8000
 
-# 启动 (沿用你之前的脚本)
-CMD ["./start.sh"]
+# 改成（使用 Python）
+CMD ["python", "-u", "server.py"]

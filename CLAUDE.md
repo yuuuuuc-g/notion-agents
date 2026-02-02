@@ -1,1 +1,38 @@
-BioBrain 项目指南 (AI Agent 专属)项目架构Agent: 基于 LangGraph 的多代理系统 (位于 /agent)API: FastAPI 后端 (位于 /api)Web: React + Tailwind + Vite (位于 /web)存储: ChromaDB (向量) + Redis (缓存)编码规范类型安全: 必须在 Python 中使用 Type Hints，在 React 中使用 TypeScript。LangGraph 状态: 修改 Node 逻辑时，必须检查 agent_graph.py 中的 State 定义是否一致。中文注释: 所有新生成的复杂逻辑必须包含中文注释。路径引用: 统一使用相对路径，避免硬编码 /Users/eve/...。常用命令后端启动: uvicorn api.main:app --reload前端启动: cd web && npm run dev依赖安装: pip install -r requirements.txt 或 npm install运行测试: pytest优化禁令禁止删除原有的 Notion 同步逻辑注释。禁止在不通知用户的情况下修改 .env 中的核心 API KEY。
+# BioBrain 项目开发规范
+
+## 项目上下文
+- **前端**: React (Vite) + TypeScript + Tailwind CSS
+- **后端**: Python (FastAPI) + LangGraph (Agent 框架)
+- **存储**: Qdrant (向量数据库) + Redis (缓存)
+
+## 命名与编码惯例
+1. **Python (后端)**:
+   - 变量与函数使用 `snake_case`。
+   - 类名使用 `PascalCase`。
+   - 必须使用 Type Hints (类型提示)。
+2. **TypeScript (前端)**:
+   - 组件文件使用 `PascalCase.tsx`。
+   - 普通函数与变量使用 `camelCase`。
+   - 严禁使用 `any` 类型，必须定义具体的 `interface` 或 `type`。
+
+## 核心优化原则 (必须遵守)
+1. **防御性编程**: 所有的 API 调用、数据库查询、文件读取必须包裹在 `try...except` 或 `try...catch` 中。
+2. **逻辑简洁性**:
+   - 优先选择简单的逻辑实现，禁止引入复杂的模式（如过度解耦、抽象工厂等）。
+   - 单个函数尽量控制在 50 行以内，超过则考虑拆分。
+3. **中文文档化**:
+   - 每一处逻辑修改必须在代码上方添加中文注释，解释“为什么要这么做”而非“这段代码做了什么”。
+   - 复杂的 LangGraph 节点必须在注释中注明“输入状态”和“预期输出状态”。
+4. **不破坏原则**:
+   - 禁止删除现有的功能性注释（如包含特殊业务逻辑说明的注释）。
+   - 禁止修改 `.env.example` 之外的 `.env` 本地环境配置文件。
+   - 修改 API 接口时，必须检查前端对应的 Hook 是否需要同步更新。
+
+## 验证与测试
+1. **自我检查**: 每次完成修改后，AI 必须尝试运行 `pytest` 或 `npm run dev` 检查是否有语法错误。
+2. **流程跑通**: 如果修改了 LangGraph 的节点逻辑，必须验证状态机（State）的流转是否依然闭环。
+
+## 常用命令
+- 启动后端: `uvicorn api.main:app --reload`
+- 启动前端: `cd web && npm run dev`
+- 依赖安装: `pip install -r requirements.txt` 或 `npm install`

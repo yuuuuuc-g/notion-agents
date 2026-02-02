@@ -385,10 +385,10 @@ async def test_cleanup_expired_sessions_memory():
     """测试内存模式下清理过期会话"""
     manager = SearchSessionManager(redis_client=None, ttl=1)
 
-    # 创建多个会话
-    # session_id1 = await manager.create_session("test1", [], [])
-    # session_id2 = await manager.create_session("test2", [], [])
-    # session_id3 = await manager.create_session("test3", [], [])
+    # 🔥 修复：直接 await，不要赋值给变量，解决 'assigned to but never used' 错误
+    await manager.create_session("test1", [], [])
+    await manager.create_session("test2", [], [])
+    await manager.create_session("test3", [], [])
 
     # 等待过期
     await asyncio.sleep(1.1)

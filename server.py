@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ Vector Store connection failed: {e}")
 
     # --- 🛑 临时关闭自动同步 (开发模式优化) ---
-    # sync_task = asyncio.create_task(auto_sync_scheduler(SETTINGS.DB_SPANISH_ID))
+    # sync_task = asyncio.create_task(auto_sync_scheduler(container.config().DB_SPANISH_ID))
     # logger.info("⚠️ Auto-sync scheduler is TEMPORARILY DISABLED.")
     # ----------------------------------------
 
