@@ -3,6 +3,7 @@ vector/embedding_provider.py
 SiliconFlow Embedding Provider
 适配 LangChain 接口，支持同步和异步调用
 """
+
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
@@ -226,7 +227,7 @@ class SiliconFlowEmbedding(Embeddings):
 
     def __del__(self):
         """清理资源"""
-        if self._async_client:
+        if hasattr(self, "_async_client") and self._async_client:
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():

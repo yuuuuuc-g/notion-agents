@@ -28,8 +28,8 @@ class Settings(BaseSettings):
 
     # === 2. 思考大脑 (LLM) ===
     OPENAI_API_KEY: Optional[str] = None
-    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
-    LLM_MODEL_NAME: str = "deepseek-ai/DeepSeek-V3"
+    OPENAI_BASE_URL: str = "https://api.deepseek.com"
+    LLM_MODEL_NAME: str = "deepseek-chat"
 
     # === 3. 记忆向量 (Embedding - 硅基流动) ===
     SILICON_KEY: Optional[str] = None
@@ -59,6 +59,18 @@ class Settings(BaseSettings):
 
     # === 7. CORS与网络 ===
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+    # === 8. 模型内存优化配置 ===
+    # 控制是否启用稀疏模型以节省内存
+    ENABLE_SPARSE_MODEL: bool = True
+    # 控制是否启用重排序模型以节省内存
+    ENABLE_RERANKER: bool = True
+    # 最大内存使用限制（MB），超过则卸载非核心模型
+    MAX_MEMORY_MB: int = 2048
+    # 稀疏模型选择（默认使用相对轻量级的模型）
+    SPARSE_MODEL_NAME: str = "prithivida/Splade_PP_en_v1"
+    # 重排序模型选择（large=精度高但内存大，base=内存小但精度略低）
+    RERANKER_MODEL_NAME: str = "BAAI/bge-reranker-large"
 
     # === Pydantic 配置 ===
     model_config = SettingsConfigDict(

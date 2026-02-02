@@ -261,9 +261,24 @@ async def manage_notion_note(
         else:
             # 创建新页面
             print("📄 [Tool] 创建新页面...")
-            blocks = markdown_to_blocks(content_markdown)
+
+            # 🔥 把 summary 作为引用块添加到内容开头
+            content_with_summary = f"""
+> 📝 **摘要**: {summary}
+
+---
+
+{content_markdown}
+"""
+
+            blocks = markdown_to_blocks(content_with_summary)
             response = await asyncio.to_thread(
-                notion_service.create_page, title, blocks, db_id=target_db_id
+                notion_service.create_page,
+                title=title,
+                children=blocks,
+                db_id=target_db_id,
+                category=category,  # 🔥 设置 Type
+                tags=[category, "AI生成"] if category else ["AI生成"],  # 🔥 设置 Tags
             )
             current_page_id = response.get("id")
 

@@ -37,7 +37,7 @@ class NotionService(INotionService):
         if not children:
             return
 
-        batch_size = 100
+        batch_size = 50  # 从100降低到50，减少内存峰值和API请求大小
         for i in range(0, len(children), batch_size):
             batch = children[i : i + batch_size]
             sub_children_map = {}
@@ -47,10 +47,13 @@ class NotionService(INotionService):
                 block_copy = block.copy()
                 b_type = block_copy.get("type")
 
-                if b_type and "children" in block_copy.get(b_type, {}):
-                    sub_children_map[idx] = block_copy[b_type].pop("children")
-                elif "children" in block_copy:
-                    sub_children_map[idx] = block_copy.pop("children")
+                # table block 的 children 是 table 结构的一部分，不应该被移除
+                # Notion API 要求 table 必须包含 table.children 属性（即使为空列表）
+                if b_type != "table":
+                    if b_type and "children" in block_copy.get(b_type, {}):
+                        sub_children_map[idx] = block_copy[b_type].pop("children")
+                    elif "children" in block_copy:
+                        sub_children_map[idx] = block_copy.pop("children")
 
                 clean_batch.append(block_copy)
 
@@ -135,31 +138,68 @@ class NotionService(INotionService):
             logger.error(f"❌ 数据库拉取通讯失败: {e}")
             raise e
 
-    # ... (保留原有的 create_page 方法) ...
+    # notion_ops.py 修复补丁
+    # 问题：创建页面时没有设置 Type 和 Tags 属性
+
     def create_page(
-        self, title: str, children: List[Dict], icon: str = "📄", db_id: str = None
+        self,
+        title: str,
+        children: List[Dict],
+        icon: str = "📄",
+        db_id: str = None,
+        category: str = None,  # 🔥 新增：对应 Type 属性
+        tags: List[str] = None,  # 🔥 新增：对应 Tags 属性
     ) -> Dict:
+        """
+        创建 Notion 页面
+
+        Args:
+            title: 页面标题
+            children: 页面内容块
+            icon: 页面图标（emoji）
+            db_id: 目标 Database ID
+            category: 分类（将设置到 Type 属性）
+            tags: 标签列表（将设置到 Tags 属性）
+
+        Returns:
+            Notion API 响应
+        """
         target_db = db_id if db_id else self.default_db_id
         if not target_db:
             raise ValueError("❌ 未配置有效的 Database ID")
 
-        logger.info(f"✍️ [Notion] 创建页面: {title}")
+        logger.info(f"✍️ [Notion] 创建页面: {title} (分类: {category})")
         page_id = None
 
         try:
-            # 1. 创建空页面
+            # 1. 构建 properties
+            properties = {"Name": {"title": [{"text": {"content": title}}]}}
+
+            # 🔥 添加 Type (分类) - select 类型
+            if category:
+                properties["Type"] = {"select": {"name": category}}
+                logger.debug(f"   - Type: {category}")
+
+            # 🔥 添加 Tags (标签) - multi_select 类型
+            if tags and isinstance(tags, list):
+                properties["Tags"] = {"multi_select": [{"name": tag} for tag in tags]}
+                logger.debug(f"   - Tags: {tags}")
+
+            # 2. 创建空页面（带属性）
             response = self.notion.pages.create(
                 parent={"database_id": target_db},
                 icon={"type": "emoji", "emoji": icon},
-                properties={"Name": {"title": [{"text": {"content": title}}]}},
+                properties=properties,  # 🔥 包含 Type 和 Tags
                 children=[],
             )
             page_id = response["id"]
+            logger.info(f"✅ [Notion] 页面创建成功: {page_id}")
 
-            # 2. 追加内容
+            # 3. 追加内容
             if children:
                 try:
                     self._append_children_in_batches(page_id, children)
+                    logger.info(f"✅ [Notion] 内容追加成功 ({len(children)} blocks)")
                 except Exception as inner_e:
                     logger.error("⚠️ 内容追加失败，执行回滚...")
                     self.delete_page(page_id)
@@ -170,6 +210,14 @@ class NotionService(INotionService):
         except Exception as e:
             logger.error(f"❌ 页面任务失败: {e}")
             raise e
+
+    # =============================================================================
+    # 修改说明
+    # =============================================================================
+    # 1. 添加了 category 参数，映射到 Notion 的 Type 属性（select）
+    # 2. 添加了 tags 参数，映射到 Notion 的 Tags 属性（multi_select）
+    # 3. 在创建页面时设置这些属性
+    # 4. 添加了详细的日志记录
 
     # ... (保留 delete_page, get_page_text, _delete_block_worker, overwrite_page_content) ...
     def delete_page(self, page_id: str) -> bool:

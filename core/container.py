@@ -3,12 +3,14 @@ core/container.py
 轻量级依赖注入容器 (Pure Python Version)
 重构版本 v4.1.0 - 适配 Merged VectorStore (v5)
 """
+
 from langchain_openai import ChatOpenAI
 
 from config.settings import SETTINGS
 from infrastructure.cache.redis_client import RedisClient
 from notion.notion_ops import NotionService
 from utils.cache_fallback import CacheWithFallback
+from vector.hybrid_search import HybridSearchEngine
 from vector.vector_store import LevelChunkVectorStore
 
 # 延迟导入以避免循环依赖
@@ -43,7 +45,26 @@ class Container:
         """
         return LevelChunkVectorStore()
 
-    # 5. Notion 服务
+    # 5. 混合检索引擎 (Hybrid Search Engine)
+    def hybrid_search_engine(self) -> HybridSearchEngine:
+        """
+        混合检索引擎，包含向量搜索、关键词搜索和重排序功能
+        """
+        # 重用向量存储的 Qdrant 客户端和 Embedding 提供器
+        vector_store = self.vector_store()
+        # 获取 Qdrant 客户端
+        qdrant_client = vector_store.client
+        # 获取 Embedding 提供器
+        embedding_provider = vector_store.embedding_provider
+        # 创建 HybridSearchEngine 实例
+        return HybridSearchEngine(
+            qdrant_client=qdrant_client,
+            embedding_provider=embedding_provider,
+            notion_service=self.notion_service(),
+            collection_name="biobrain_memory",  # 与向量存储保持一致
+        )
+
+    # 6. Notion 服务
     def notion_service(self):
         cfg = self.config()
         return NotionService(token=cfg.NOTION_TOKEN, default_db_id=cfg.DB_SPANISH_ID)
@@ -53,8 +74,8 @@ class Container:
         cfg = self.config()
         return ChatOpenAI(
             model=model or cfg.LLM_MODEL_NAME,
-            openai_api_key=cfg.SILICON_KEY,
-            openai_api_base=cfg.SILICON_BASE_URL,
+            openai_api_key=cfg.OPENAI_API_KEY,
+            openai_api_base=cfg.OPENAI_BASE_URL,
             streaming=True,
             timeout=120,
             max_retries=2,

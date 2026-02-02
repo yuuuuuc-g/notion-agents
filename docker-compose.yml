@@ -25,6 +25,12 @@ services:
       - REDIS_PORT=6379
       - QDRANT_HOST=biobrain_qdrant
       - QDRANT_PORT=6333
+    deploy:
+      resources:
+        limits:
+          memory: 4G  # 限制最大内存使用
+        reservations:
+          memory: 1G  # 预留最小内存
     volumes:
       # 后端挂载根目录是正确的，因为 server.py 在根目录
       - ./chroma_db:/app/chroma_db

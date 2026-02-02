@@ -232,6 +232,32 @@ npm run dev
     docker-compose up --build
     ```
 
+## 🧠 Memory Optimization (内存优化)
+
+BioBrain includes intelligent memory management for large AI models. The system can automatically load/unload models based on usage patterns and memory constraints.
+
+### Configuration Options
+
+Add these environment variables to your `.env` file:
+
+- `ENABLE_SPARSE_MODEL=true` - Enable/disable sparse embedding model (Splade)
+- `ENABLE_RERANKER=true` - Enable/disable cross-encoder reranker model
+- `MAX_MEMORY_MB=2048` - Maximum memory limit (MB) for model loading decisions
+- `SPARSE_MODEL_NAME=prithivida/Splade_PP_en_v1` - Sparse model name
+- `RERANKER_MODEL_NAME=BAAI/bge-reranker-large` - Reranker model name
+
+### Production Recommendations
+
+1. **Memory-constrained environments**: Set `ENABLE_SPARSE_MODEL=false` and `ENABLE_RERANKER=false` to disable optional models (~1GB memory saving).
+2. **Balanced deployment**: Keep sparse model enabled, disable reranker if memory < 4GB.
+3. **High-memory servers**: Increase `MAX_MEMORY_MB` to 4096 or higher for better performance.
+
+### Monitoring
+
+Access the memory monitoring endpoint at `/api/memory` to view current memory usage and model status. Use `/api/memory/cleanup` (POST) to manually trigger cleanup of idle models.
+
+The system automatically unloads models idle for >5 minutes via a background scheduler.
+
 ## 🤝 贡献 (Contributing)
 
 欢迎提交 Bug 报告、功能请求或 Pull Request。

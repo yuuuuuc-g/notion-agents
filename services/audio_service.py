@@ -129,7 +129,7 @@ class AudioService:
             logger.info(f"✅ Audio saved: {final_path}")
 
             # 返回给前端的 URL 路径 (假设挂载在 /audio 下)
-            return f"/audio/{filename_only}"
+            return f"/generated_audio/{filename_only}"
 
         except Exception as e:
             logger.error(f"❌ Audio generation error: {str(e)}")

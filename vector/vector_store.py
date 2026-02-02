@@ -7,11 +7,21 @@ vector/vector_store.py
 
 import os
 import threading
+import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
+
+# 导入配置
+try:
+    from config.settings import SETTINGS
+
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    SETTINGS = None
 
 from utils.logger import get_logger
 
@@ -19,6 +29,15 @@ from .doc_store import DOC_STORE
 from .embedding_provider import SiliconFlowEmbedding
 from .hierarchical_chunker import HierarchicalChunk, HierarchicalChunker
 from .vector_interface import IVectorStore
+
+# 导入配置和内存监控
+try:
+    import psutil
+
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    psutil = None
 
 # 尝试导入稀疏向量模型
 try:
@@ -30,8 +49,12 @@ except ImportError:
 
 logger = get_logger(__name__)
 
+# 类型提示导入（仅用于类型检查）
+if TYPE_CHECKING:
+    from fastembed import SparseTextEmbedding
+
 # 默认稀疏模型
-SPARSE_MODEL_NAME = "prithivida/Splade_PP_en_v1"
+DEFAULT_SPARSE_MODEL = "prithivida/Splade_PP_en_v1"
 
 
 class LevelChunkVectorStore(IVectorStore):
@@ -50,7 +73,7 @@ class LevelChunkVectorStore(IVectorStore):
                     cls._instance = super(LevelChunkVectorStore, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, collection_name: str = None):
+    def __init__(self, collection_name: Optional[str] = None):
         if self._initialized:
             return
 
@@ -65,10 +88,16 @@ class LevelChunkVectorStore(IVectorStore):
             self.port = int(os.getenv("QDRANT_PORT", 6333))
 
             self._client: Optional[QdrantClient] = None
-            self._embedding_provider = None
-            self._sparse_embedding_model = None
-            self._chunker = None
+            self._embedding_provider: Optional[Any] = None
+            self._sparse_embedding_model: Optional[Any] = None
+            self._chunker: Optional[Any] = None
             self.chunk_cache: Dict[str, HierarchicalChunk] = {}
+
+            # 内存优化相关字段
+            self._sparse_model_loaded = False
+            self._sparse_model_last_used = 0.0  # 上次使用时间戳
+            self._sparse_model_load_count = 0  # 加载次数统计
+            self._memory_warning_shown = False  # 内存警告是否已显示
 
             self._initialized = True
             logger.info("💤 [VectorStore] Initialized (Lazy Mode).")
@@ -84,6 +113,8 @@ class LevelChunkVectorStore(IVectorStore):
             with self._init_lock:
                 if self._client is None:
                     self._connect()
+        # self._connect() 应该已经设置了self._client
+        assert self._client is not None, "Qdrant client not initialized"
         return self._client
 
     @property
@@ -95,31 +126,209 @@ class LevelChunkVectorStore(IVectorStore):
         return self._embedding_provider
 
     @property
-    def sparse_model(self):
-        if not SPARSE_MODEL_AVAILABLE:
+    def sparse_model(self) -> Optional[Any]:
+        """
+        稀疏模型属性（内存优化版）
+        添加了配置检查、内存监控和自动卸载机制
+        """
+        # 检查是否应该加载稀疏模型
+        if not self._should_load_sparse_model():
             return None
 
+        # 如果模型已经加载，更新使用时间并返回
+        if self._sparse_model_loaded and self._sparse_embedding_model is not None:
+            self._sparse_model_last_used = time.time()
+            return self._sparse_embedding_model
+
+        # 加载稀疏模型（线程安全）
         if self._sparse_embedding_model is None:
             with self._init_lock:
                 if self._sparse_embedding_model is None:
-                    logger.info(f"⏳ Loading Sparse Model: {SPARSE_MODEL_NAME}...")
+                    # 再次检查配置（在锁内）
+                    if not self._should_load_sparse_model():
+                        return None
+
+                    # 从配置获取模型名称，默认为轻量级模型
+                    model_name = DEFAULT_SPARSE_MODEL
+                    if (
+                        CONFIG_AVAILABLE
+                        and SETTINGS
+                        and hasattr(SETTINGS, "SPARSE_MODEL_NAME")
+                    ):
+                        model_name = SETTINGS.SPARSE_MODEL_NAME
+
+                    logger.info(f"⏳ Loading Sparse Model: {model_name}...")
                     try:
                         self._sparse_embedding_model = SparseTextEmbedding(
-                            model_name=SPARSE_MODEL_NAME
+                            model_name=model_name
                         )
-                        logger.info("✅ Sparse Model loaded.")
+                        self._sparse_model_loaded = True
+                        self._sparse_model_load_count += 1
+                        self._sparse_model_last_used = time.time()
+                        logger.info(
+                            f"✅ Sparse Model loaded. (Load count: {self._sparse_model_load_count})"
+                        )
                     except Exception as e:
                         logger.error(f"❌ Failed to load Sparse Model: {e}")
                         return None
+
         return self._sparse_embedding_model
 
     @property
-    def chunker(self):
+    def chunker(self) -> HierarchicalChunker:
         if self._chunker is None:
             with self._init_lock:
                 if self._chunker is None:
                     self._chunker = HierarchicalChunker()
+        # 此时_chunker肯定不是None
+        assert self._chunker is not None
         return self._chunker
+
+    def _check_memory_usage(self) -> float:
+        """
+        检查当前进程内存使用情况
+        返回：内存使用量（MB）
+        """
+        if not PSUTIL_AVAILABLE or psutil is None:
+            return 0.0
+
+        # 此时psutil肯定不是None（已经检查过PSUTIL_AVAILABLE和psutil is None）
+        assert psutil is not None
+
+        try:
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info()
+            memory_mb = memory_info.rss / (1024 * 1024)  # 转换为MB
+            return memory_mb
+        except Exception as e:
+            logger.warning(f"⚠️ Memory check failed: {e}")
+            return 0.0
+
+    def _should_load_sparse_model(self) -> bool:
+        """
+        判断是否应该加载稀疏模型
+        考虑因素：配置、内存使用、上次使用时间
+        """
+        # 1. 检查配置是否启用
+        if CONFIG_AVAILABLE and SETTINGS and hasattr(SETTINGS, "ENABLE_SPARSE_MODEL"):
+            if not SETTINGS.ENABLE_SPARSE_MODEL:
+                logger.debug("📉 Sparse model disabled by configuration")
+                return False
+
+        # 2. 检查稀疏模型是否可用
+        if not SPARSE_MODEL_AVAILABLE:
+            return False
+
+        # 3. 检查内存使用情况
+        if PSUTIL_AVAILABLE and CONFIG_AVAILABLE and SETTINGS:
+            memory_mb = self._check_memory_usage()
+            max_memory = getattr(SETTINGS, "MAX_MEMORY_MB", 2048)
+
+            if memory_mb > max_memory * 0.8:  # 超过80%内存限制
+                if not self._memory_warning_shown:
+                    logger.warning(
+                        f"⚠️ High memory usage ({memory_mb:.1f}MB > {max_memory * 0.8:.0f}MB), "
+                        "consider disabling sparse model"
+                    )
+                    self._memory_warning_shown = True
+                return False
+
+        # 4. 如果模型已经加载，直接返回
+        if self._sparse_model_loaded and self._sparse_embedding_model is not None:
+            import time
+
+            self._sparse_model_last_used = time.time()
+            return True
+
+        return True
+
+    def unload_sparse_model(self):
+        """
+        卸载稀疏模型以释放内存
+        """
+        if self._sparse_embedding_model is not None:
+            logger.info("🗑️ Unloading sparse model to free memory")
+            self._sparse_embedding_model = None
+            self._sparse_model_loaded = False
+            # 注意：无法真正释放Python对象内存，但可以允许GC回收
+
+    def _get_sparse_model_name(self) -> str:
+        """
+        获取当前配置的稀疏模型名称
+        """
+        if CONFIG_AVAILABLE and SETTINGS and hasattr(SETTINGS, "SPARSE_MODEL_NAME"):
+            return SETTINGS.SPARSE_MODEL_NAME
+        return DEFAULT_SPARSE_MODEL
+
+    def _estimate_sparse_model_size_mb(self) -> float:
+        """
+        估算稀疏模型内存占用（MB）
+
+        策略：
+        1. 如果模型已加载，尝试使用PyTorch API获取实际内存占用
+        2. 否则，根据模型名称映射到已知的近似内存大小
+        3. 默认回退到保守估计（500MB）
+        """
+        # 已知模型名称到近似内存大小（MB）的映射
+        MODEL_SIZE_MAPPING = {
+            "prithivida/Splade_PP_en_v1": 400.0,
+            "naver/splade-cocondenser-ensembledistil": 450.0,
+            "default": 500.0,
+        }
+
+        model_name = self._get_sparse_model_name()
+
+        # 如果模型已加载，尝试使用PyTorch测量实际内存占用
+        if self._sparse_model_loaded and self._sparse_embedding_model is not None:
+            try:
+                import torch
+
+                # 尝试获取模型对象（假设_sparse_embedding_model有model属性）
+                if hasattr(self._sparse_embedding_model, "model"):
+                    model = self._sparse_embedding_model.model
+                    # 估算参数内存占用
+                    param_size = sum(
+                        p.numel() * p.element_size() for p in model.parameters()
+                    )
+                    buffer_size = sum(
+                        b.numel() * b.element_size() for b in model.buffers()
+                    )
+                    total_size_mb = (param_size + buffer_size) / (1024 * 1024)
+                    return total_size_mb
+                # 如果无法获取模型对象，使用CUDA内存分配（如果使用GPU）
+                if torch.cuda.is_available():
+                    cuda_mb = torch.cuda.memory_allocated() / (1024 * 1024)
+                    if cuda_mb > 10:
+                        return cuda_mb
+            except ImportError:
+                pass  # PyTorch不可用，回退到映射估计
+
+        # 使用模型名称映射估计
+        for key, size_mb in MODEL_SIZE_MAPPING.items():
+            if key in model_name:
+                return size_mb
+
+        return MODEL_SIZE_MAPPING["default"]
+
+    def get_sparse_model_stats(self) -> Dict[str, Any]:
+        """
+        获取稀疏模型统计信息
+        """
+        model_size_mb = 0.0
+        try:
+            model_size_mb = self._estimate_sparse_model_size_mb()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to estimate sparse model size: {e}")
+            # 回退到基于模型名称的保守估计
+            model_size_mb = 500.0  # 默认保守估计
+
+        return {
+            "loaded": self._sparse_model_loaded,
+            "load_count": self._sparse_model_load_count,
+            "last_used": self._sparse_model_last_used,
+            "memory_warning_shown": self._memory_warning_shown,
+            "model_size_mb": round(model_size_mb, 2),
+        }
 
     def _connect(self):
         logger.info(f"🚀 Connecting to Qdrant at {self.host}:{self.port}...")
@@ -166,12 +375,16 @@ class LevelChunkVectorStore(IVectorStore):
                 client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name="domain",
-                    field_schema="keyword",
+                    field_schema=models.KeywordIndexParams(
+                        type=models.KeywordIndexType.KEYWORD
+                    ),
                 )
                 client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name="page_id",
-                    field_schema="keyword",
+                    field_schema=models.KeywordIndexParams(
+                        type=models.KeywordIndexType.KEYWORD
+                    ),
                 )
 
         except Exception as e:
@@ -183,8 +396,8 @@ class LevelChunkVectorStore(IVectorStore):
         page_id: str,
         text: str,
         *,
-        title: str = None,
-        domain: str = None,
+        title: Optional[str] = None,
+        domain: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         skip_if_exists: bool = False,
         notion_blocks: Optional[List[Dict]] = None,
@@ -379,6 +592,8 @@ class LevelChunkVectorStore(IVectorStore):
             results_with_context = []
             for point in points:
                 payload = point.payload
+                if not payload:
+                    continue
                 chunk_id = payload.get("chunk_id")
 
                 chunk_obj = self.chunk_cache.get(chunk_id)
@@ -389,6 +604,8 @@ class LevelChunkVectorStore(IVectorStore):
                         chunk_id, include_parent=True, include_children=True
                     )
                     if chunk_data:
+                        # 此时chunk_data肯定不是None
+                        assert chunk_data is not None
                         full_context = chunk_data.get("full_context")
 
                 results_with_context.append(
@@ -456,6 +673,34 @@ class LevelChunkVectorStore(IVectorStore):
         except Exception as e:
             logger.error(f"Failed to delete {page_id}: {e}")
             return False
+
+    def auto_unload_idle_models(self, idle_threshold_seconds: int = 300) -> bool:
+        """
+        自动卸载闲置模型以释放内存
+
+        参数:
+            idle_threshold_seconds: 闲置时间阈值（秒），默认5分钟
+
+        返回:
+            bool: 是否有模型被卸载
+        """
+        unloaded = False
+        current_time = time.time()
+
+        # 检查稀疏模型
+        if (
+            self._sparse_model_loaded
+            and self._sparse_embedding_model is not None
+            and current_time - self._sparse_model_last_used > idle_threshold_seconds
+        ):
+            logger.info(
+                f"🗑️ Auto-unloading sparse model (idle for "
+                f"{int(current_time - self._sparse_model_last_used)}s)"
+            )
+            self.unload_sparse_model()
+            unloaded = True
+
+        return unloaded
 
 
 _default_store = LevelChunkVectorStore()

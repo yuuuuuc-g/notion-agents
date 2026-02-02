@@ -8,13 +8,37 @@ vector/hybrid_search.py
 3. RRF 融合排序：结合两种搜索的优势
 4. 重排序（可选）：使用 Cross-Encoder 提升精度
 """
+
+import os
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
+# 导入配置
+try:
+    from config.settings import SETTINGS
+
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    SETTINGS = None
+
+# 导入内存监控
+try:
+    import psutil
+
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+    psutil = None
+
 from utils.logger import get_logger
+
+# 默认重排序模型
+DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-large"
 
 logger = get_logger(__name__)
 
@@ -79,6 +103,197 @@ class HybridSearchEngine:
         self.vector_weight = 0.6  # 向量搜索权重
         self.keyword_weight = 0.4  # 关键词搜索权重
 
+        # 重排序模型缓存和内存优化字段
+        self._reranker = None
+        self._reranker_loaded = False
+        self._reranker_last_used = 0.0  # 上次使用时间戳
+        self._reranker_load_count = 0  # 加载次数统计
+        self._memory_warning_shown = False  # 内存警告是否已显示
+
+    def _check_memory_usage(self) -> float:
+        """
+        检查当前进程内存使用情况
+        返回：内存使用量（MB）
+        """
+        if not PSUTIL_AVAILABLE:
+            return 0.0
+
+        try:
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info()
+            memory_mb = memory_info.rss / (1024 * 1024)  # 转换为MB
+            return memory_mb
+        except Exception as e:
+            logger.warning(f"⚠️ Memory check failed: {e}")
+            return 0.0
+
+    def _should_load_reranker(self) -> bool:
+        """
+        判断是否应该加载重排序模型
+        考虑因素：配置、内存使用、上次使用时间
+        """
+        # 1. 检查配置是否启用
+        if CONFIG_AVAILABLE and SETTINGS and hasattr(SETTINGS, "ENABLE_RERANKER"):
+            if not SETTINGS.ENABLE_RERANKER:
+                logger.debug("📉 Reranker disabled by configuration")
+                return False
+
+        # 2. 检查内存使用情况
+        if PSUTIL_AVAILABLE and CONFIG_AVAILABLE and SETTINGS:
+            memory_mb = self._check_memory_usage()
+            max_memory = getattr(SETTINGS, "MAX_MEMORY_MB", 2048)
+
+            if memory_mb > max_memory * 0.8:  # 超过80%内存限制
+                if not self._memory_warning_shown:
+                    logger.warning(
+                        f"⚠️ High memory usage ({memory_mb:.1f}MB > {max_memory * 0.8:.0f}MB), "
+                        "consider disabling reranker"
+                    )
+                    self._memory_warning_shown = True
+                return False
+
+        # 3. 如果模型已经加载，直接返回
+        if self._reranker_loaded and self._reranker is not None:
+            self._reranker_last_used = time.time()
+            return True
+
+        return True
+
+    def unload_reranker(self):
+        """
+        卸载重排序模型以释放内存
+        """
+        if self._reranker is not None:
+            logger.info("🗑️ Unloading reranker model to free memory")
+            self._reranker = None
+            self._reranker_loaded = False
+
+    def _get_reranker_model_name(self) -> str:
+        """
+        获取当前配置的重排序模型名称
+        """
+        if CONFIG_AVAILABLE and SETTINGS and hasattr(SETTINGS, "RERANKER_MODEL_NAME"):
+            return SETTINGS.RERANKER_MODEL_NAME
+        return DEFAULT_RERANKER_MODEL
+
+    def _estimate_reranker_size_mb(self) -> float:
+        """
+        估算重排序模型内存占用（MB）
+
+        策略：
+        1. 如果模型已加载，尝试使用PyTorch API获取实际内存占用
+        2. 否则，根据模型名称映射到已知的近似内存大小
+        3. 默认回退到保守估计（600MB）
+        """
+        # 已知模型名称到近似内存大小（MB）的映射
+        MODEL_SIZE_MAPPING = {
+            "BAAI/bge-reranker-large": 600.0,
+            "BAAI/bge-reranker-base": 300.0,
+            "cross-encoder/ms-marco-MiniLM-L-6-v2": 200.0,
+            "default": 600.0,
+        }
+
+        model_name = self._get_reranker_model_name()
+
+        # 如果模型已加载，尝试使用PyTorch测量实际内存占用
+        if self._reranker_loaded and self._reranker is not None:
+            try:
+                import torch
+
+                # CrossEncoder 模型通常有 .model 属性
+                if hasattr(self._reranker, "model"):
+                    model = self._reranker.model
+                    # 估算参数内存占用
+                    param_size = sum(
+                        p.numel() * p.element_size() for p in model.parameters()
+                    )
+                    buffer_size = sum(
+                        b.numel() * b.element_size() for b in model.buffers()
+                    )
+                    total_size_mb = (param_size + buffer_size) / (1024 * 1024)
+                    return total_size_mb
+                # 如果无法获取模型对象，使用CUDA内存分配（如果使用GPU）
+                if torch.cuda.is_available():
+                    cuda_mb = torch.cuda.memory_allocated() / (1024 * 1024)
+                    if cuda_mb > 10:
+                        return cuda_mb
+            except ImportError:
+                pass  # PyTorch不可用，回退到映射估计
+
+        # 使用模型名称映射估计
+        for key, size_mb in MODEL_SIZE_MAPPING.items():
+            if key in model_name:
+                return size_mb
+
+        return MODEL_SIZE_MAPPING["default"]
+
+    def get_reranker_stats(self) -> Dict[str, Any]:
+        """
+        获取重排序模型统计信息
+        """
+        model_size_mb = 0.0
+        try:
+            model_size_mb = self._estimate_reranker_size_mb()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to estimate reranker model size: {e}")
+            model_size_mb = 600.0  # 默认保守估计
+
+        return {
+            "loaded": self._reranker_loaded,
+            "load_count": self._reranker_load_count,
+            "last_used": self._reranker_last_used,
+            "memory_warning_shown": self._memory_warning_shown,
+            "model_size_mb": round(model_size_mb, 2),
+        }
+
+    @property
+    def reranker(self):
+        """
+        懒加载 CrossEncoder 重排序模型（内存优化版）
+        添加了配置检查、内存监控和自动卸载机制
+        """
+        # 检查是否应该加载重排序模型
+        if not self._should_load_reranker():
+            return None
+
+        # 如果模型已经加载，更新使用时间并返回
+        if self._reranker_loaded and self._reranker is not None:
+            self._reranker_last_used = time.time()
+            return self._reranker
+
+        # 加载重排序模型
+        if self._reranker is None:
+            try:
+                from sentence_transformers import CrossEncoder
+
+                # 从配置获取模型名称，默认为 large 版本
+                model_name = DEFAULT_RERANKER_MODEL
+                if (
+                    CONFIG_AVAILABLE
+                    and SETTINGS
+                    and hasattr(SETTINGS, "RERANKER_MODEL_NAME")
+                ):
+                    model_name = SETTINGS.RERANKER_MODEL_NAME
+
+                logger.info(f"⏳ Loading CrossEncoder model '{model_name}'...")
+                self._reranker = CrossEncoder(model_name)
+                self._reranker_loaded = True
+                self._reranker_load_count += 1
+                self._reranker_last_used = time.time()
+                logger.info(
+                    f"✅ CrossEncoder loaded successfully. (Load count: {self._reranker_load_count})"
+                )
+            except ImportError:
+                logger.warning(
+                    "⚠️ sentence-transformers not installed, skipping reranking"
+                )
+                self._reranker = None
+            except Exception as e:
+                logger.error(f"❌ Failed to load CrossEncoder: {e}")
+                self._reranker = None
+
+        return self._reranker
+
     async def search(
         self,
         query: str,
@@ -120,7 +335,14 @@ class HybridSearchEngine:
         )
 
         # 4. 重排序（可选）
-        if use_reranker and len(fused_results) > 1:
+        # 检查配置是否允许使用重排序
+        should_rerank = use_reranker
+        if CONFIG_AVAILABLE and SETTINGS and hasattr(SETTINGS, "ENABLE_RERANKER"):
+            if not SETTINGS.ENABLE_RERANKER:
+                logger.debug("📉 Reranker disabled by configuration, skipping")
+                should_rerank = False
+
+        if should_rerank and len(fused_results) > 1:
             try:
                 fused_results = await self._rerank(query, fused_results)
             except Exception as e:
@@ -279,10 +501,12 @@ class HybridSearchEngine:
         """
         使用 Cross-Encoder 重排序
         """
-        try:
-            from sentence_transformers import CrossEncoder
+        reranker = self.reranker
+        if reranker is None:
+            logger.debug("⚠️ Reranker not available, skipping reranking")
+            return candidates
 
-            reranker = CrossEncoder("BAAI/bge-reranker-large")
+        try:
             pairs = [(query, result.content) for result in candidates]
             rerank_scores = reranker.predict(pairs)
 
@@ -299,9 +523,6 @@ class HybridSearchEngine:
             logger.debug(f"♻️ [Reranker] Reranked {len(results)} results")
             return results
 
-        except ImportError:
-            logger.warning("⚠️ sentence-transformers not installed, skipping reranking")
-            return candidates
         except Exception as e:
             logger.error(f"❌ Reranking failed: {e}")
             return candidates
@@ -354,6 +575,34 @@ class HybridSearchEngine:
             results_with_context.append(result_dict)
 
         return results_with_context
+
+    def auto_unload_idle_models(self, idle_threshold_seconds: int = 300) -> bool:
+        """
+        自动卸载闲置的重排序模型以释放内存
+
+        参数:
+            idle_threshold_seconds: 闲置时间阈值（秒），默认5分钟
+
+        返回:
+            bool: 是否有模型被卸载
+        """
+        unloaded = False
+        current_time = time.time()
+
+        # 检查重排序模型
+        if (
+            self._reranker_loaded
+            and self._reranker is not None
+            and current_time - self._reranker_last_used > idle_threshold_seconds
+        ):
+            logger.info(
+                f"🗑️ Auto-unloading reranker model (idle for "
+                f"{int(current_time - self._reranker_last_used)}s)"
+            )
+            self.unload_reranker()
+            unloaded = True
+
+        return unloaded
 
 
 # =============================================================================
