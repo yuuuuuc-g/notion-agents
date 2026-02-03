@@ -341,18 +341,51 @@ async def test_aembed_documents_empty_list(mock_settings):
     assert vectors == []
 
 
-def test_del_cleanup(mock_settings):
-    """测试资源清理"""
+def test_thread_pool_lazy_loading(mock_settings):
+    """测试 thread_pool 懒加载（和 async_client 对称）"""
     provider = SiliconFlowEmbedding()
 
-    # 触发 async_client 创建
-    _ = provider.async_client
+    # 初始时不应该创建
+    assert provider._thread_pool is None
 
-    # 调用 __del__ 应该不抛出异常
-    try:
-        provider.__del__()
-    except Exception as e:
-        pytest.fail(f"__del__ should not raise exception: {e}")
+    # 访问属性时才创建
+    pool = provider.thread_pool
+    assert pool is not None
+
+    # 再次访问返回同一个实例（复用）
+    pool2 = provider.thread_pool
+    assert pool is pool2
+
+
+@pytest.mark.asyncio
+async def test_close_cleanup(mock_settings):
+    """测试 close() 正确清理 async_client 和 thread_pool"""
+    provider = SiliconFlowEmbedding()
+
+    # 触发两个懒加载属性创建
+    _ = provider.async_client
+    _ = provider.thread_pool
+    assert provider._async_client is not None
+    assert provider._thread_pool is not None
+
+    # 调用 close()，两者都应该被清理
+    await provider.close()
+    assert provider._async_client is None
+    assert provider._thread_pool is None
+
+
+@pytest.mark.asyncio
+async def test_close_idempotent(mock_settings):
+    """测试 close() 可以重复调用不会崩溃"""
+    provider = SiliconFlowEmbedding()
+
+    # 不触发懒加载，直接 close（都是 None）
+    await provider.close()
+    assert provider._async_client is None
+    assert provider._thread_pool is None
+
+    # 再调用一次，还是不崩溃
+    await provider.close()
 
 
 def test_headers_format(mock_settings, mock_httpx_response):

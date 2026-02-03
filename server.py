@@ -1,13 +1,17 @@
 """
 Biobrain Server Entry Point
-版本：v4.7 (Routes Directory Fix)
-描述：FastAPI 主应用入口。
-修复：修正导入路径以指向 api/routes/ 目录。
+版本：v4.8 (Code Review Fixed)
+修复：
+  - 删除 reload=False 时无效的 reload_excludes（死代码）
+  - CORS: allow_credentials 改为 False（单机项目不需要）
+  - lifespan 预创建 AUDIO_DIR，防止 StaticFiles 启动崩溃
+  - 删除端点函数内多余的 `from core.container import container`
 """
 
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -18,54 +22,42 @@ from config.settings import SETTINGS
 from core.container import container
 from middleware.bandwidth_limiter import BandwidthLimiterMiddleware
 from middleware.error_handler import register_exception_handlers
-
-# ✅ 新增：导入监控中间件和处理函数
 from middleware.metrics import PrometheusMiddleware, metrics_endpoint
 from utils.logger import setup_logging
 
-# 1. 路由模块导入 (修正路径：api.routes.*)
-# -------------------------------------------------------------------------
+# 路由导入
 try:
-    from api.routes.admin import router as admin_router  # api/routes/admin.py
-    from api.routes.chat import router as chat_router  # api/routes/chat.py
-    from api.routes.files import router as files_router  # api/routes/files.py
-    from api.routes.system import router as system_router  # api/routes/system.py
-
+    from api.routes.admin import router as admin_router
+    from api.routes.chat import router as chat_router
+    from api.routes.files import router as files_router
+    from api.routes.system import router as system_router
 except ImportError as e:
-    # 打印详细错误以帮助调试
     import sys
 
     print(f"❌ 路由导入失败: {e}")
     print(f"   当前 sys.path: {sys.path[:2]}")
     raise e
-# -------------------------------------------------------------------------
 
-# 初始化日志
 setup_logging()
 logger = logging.getLogger("biobrain.server")
 
 
+# ==========================================
+# 自动清理调度器
+# ==========================================
 async def auto_cleanup_scheduler(interval_seconds: int = 300):
-    """
-    自动清理闲置模型的调度器
-
-    定期检查并卸载闲置的稀疏模型和重排序模型以释放内存
-    """
+    """定期检查并卸载闲置模型以释放内存"""
     logger.info(f"🔄 Starting auto cleanup scheduler (interval: {interval_seconds}s)")
+
     while True:
         try:
-            # 获取容器实例
-            from core.container import container
-
             vector_store = container.vector_store()
             unloaded_count = 0
 
-            # 卸载稀疏模型
             if hasattr(vector_store, "auto_unload_idle_models"):
                 if vector_store.auto_unload_idle_models():
                     unloaded_count += 1
 
-            # 卸载重排序模型
             try:
                 hybrid_engine = container.hybrid_search_engine()
                 if hasattr(hybrid_engine, "auto_unload_idle_models"):
@@ -80,14 +72,18 @@ async def auto_cleanup_scheduler(interval_seconds: int = 300):
         except Exception as e:
             logger.error(f"❌ Auto cleanup scheduler error: {e}")
 
-        # 等待下一个周期
         await asyncio.sleep(interval_seconds)
 
 
-# 2. 生命周期管理
+# ==========================================
+# 生命周期管理
+# ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🚀 Biobrain Server starting up...")
+
+    # 🔥 预创建音频目录，防止 StaticFiles 崩溃
+    os.makedirs(SETTINGS.AUDIO_DIR, exist_ok=True)
 
     # 连接预热
     try:
@@ -102,10 +98,8 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # 关闭清理
+    # ── Shutdown ──
     logger.info("🛑 Biobrain Server shutting down...")
-
-    # 停止自动清理调度器
     cleanup_task.cancel()
     try:
         await cleanup_task
@@ -113,34 +107,37 @@ async def lifespan(app: FastAPI):
         pass
 
 
-# 3. App 初始化
+# ==========================================
+# App 初始化
+# ==========================================
 app = FastAPI(
     title="Biobrain API",
-    version="4.3.0",
+    version="4.8.0",
     description="AI Second Brain with Notion & Qdrant Integration",
     lifespan=lifespan,
 )
 
-# 4. 中间件
+# 中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,  # 🔥 修复: * 不能和 credentials=True 同时用
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# ✅ 新增：注册 Prometheus 监控中间件
 app.add_middleware(PrometheusMiddleware)
 app.add_middleware(BandwidthLimiterMiddleware, max_bandwidth_mb=50)
 
-# 5. 异常处理 - 注册所有标准异常处理器
+# 异常处理
 register_exception_handlers(app)
 
-# 6. 注册路由
+# 路由注册
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(admin_router, prefix="/api/admin")
+
+# 静态文件（音频）
 app.mount(
     "/generated_audio",
     StaticFiles(directory=SETTINGS.AUDIO_DIR),
@@ -148,51 +145,50 @@ app.mount(
 )
 
 
-# ✅ 新增：注册监控指标接口
+# ==========================================
+# 监控端点
+# ==========================================
 @app.get("/metrics", tags=["System"])
 def metrics(request: Request):
     return metrics_endpoint(request)
 
 
-# 根路径健康检查
 @app.get("/health", tags=["System"])
 async def root_health_check():
     return {"status": "healthy", "service": "biobrain-server"}
 
 
-# 内存监控端点
+# ==========================================
+# 内存监控
+# ==========================================
 @app.get("/api/memory", tags=["System"])
 async def get_memory_usage():
-    """
-    获取系统内存使用情况和模型加载状态
-    """
+    """获取系统内存使用情况和模型加载状态"""
     try:
         import psutil
+    except ImportError:
+        return {
+            "error": "psutil not available",
+            "suggestion": "pip install psutil",
+        }
 
-        # 获取进程内存信息
+    try:
         process = psutil.Process(os.getpid())
-        memory_info = process.memory_info()
-        memory_mb = memory_info.rss / (1024 * 1024)  # 转换为MB
-
-        # 获取系统内存信息
+        memory_mb = process.memory_info().rss / (1024 * 1024)
         system_memory = psutil.virtual_memory()
 
-        # 获取模型状态
-        from core.container import container
-
-        vector_store = container.vector_store()
+        # 模型状态
+        vector_store = container.vector_store()  # 🔥 删除多余的 import
 
         sparse_model_stats = {}
         reranker_stats = {}
 
-        try:
-            # 获取稀疏模型统计信息
-            if hasattr(vector_store, "get_sparse_model_stats"):
+        if hasattr(vector_store, "get_sparse_model_stats"):
+            try:
                 sparse_model_stats = vector_store.get_sparse_model_stats()
-        except Exception as e:
-            sparse_model_stats = {"error": str(e)}
+            except Exception as e:
+                sparse_model_stats = {"error": str(e)}
 
-        # 尝试获取重排序模型统计信息（如果可用）
         try:
             hybrid_engine = container.hybrid_search_engine()
             if hasattr(hybrid_engine, "get_reranker_stats"):
@@ -200,25 +196,20 @@ async def get_memory_usage():
         except Exception as e:
             reranker_stats = {"error": str(e)}
 
-        # 检查配置
-        config_info = {}
-        try:
-            if SETTINGS:
-                config_info = {
-                    "ENABLE_SPARSE_MODEL": getattr(
-                        SETTINGS, "ENABLE_SPARSE_MODEL", True
-                    ),
-                    "ENABLE_RERANKER": getattr(SETTINGS, "ENABLE_RERANKER", True),
-                    "MAX_MEMORY_MB": getattr(SETTINGS, "MAX_MEMORY_MB", 2048),
-                    "SPARSE_MODEL_NAME": getattr(
-                        SETTINGS, "SPARSE_MODEL_NAME", "prithivida/Splade_PP_en_v1"
-                    ),
-                    "RERANKER_MODEL_NAME": getattr(
-                        SETTINGS, "RERANKER_MODEL_NAME", "BAAI/bge-reranker-large"
-                    ),
-                }
-        except Exception:
-            pass
+        # 配置信息
+        config_info = {
+            "ENABLE_SPARSE_MODEL": getattr(SETTINGS, "ENABLE_SPARSE_MODEL", True),
+            "ENABLE_RERANKER": getattr(SETTINGS, "ENABLE_RERANKER", True),
+            "MAX_MEMORY_MB": getattr(SETTINGS, "MAX_MEMORY_MB", 2048),
+            "SPARSE_MODEL_NAME": getattr(SETTINGS, "SPARSE_MODEL_NAME", "unknown"),
+            "RERANKER_MODEL_NAME": getattr(SETTINGS, "RERANKER_MODEL_NAME", "unknown"),
+        }
+
+        warnings = []
+        if memory_mb > 1500:
+            warnings.append(f"Process using {round(memory_mb, 2)}MB of memory")
+        if system_memory.percent > 80:
+            warnings.append(f"System memory {round(system_memory.percent, 2)}% used")
 
         return {
             "process_memory_mb": round(memory_mb, 2),
@@ -232,52 +223,34 @@ async def get_memory_usage():
                 "reranker_model": reranker_stats,
                 "config": config_info,
             },
-            "warnings": [
-                f"Process using {round(memory_mb, 2)}MB of memory",
-                f"System memory {round(system_memory.percent, 2)}% used",
-            ]
-            if memory_mb > 1500 or system_memory.percent > 80
-            else [],
+            "warnings": warnings,
         }
 
-    except ImportError:
-        return {
-            "error": "psutil not available for memory monitoring",
-            "suggestion": "Install psutil: pip install psutil",
-        }
     except Exception as e:
         return {"error": f"Memory monitoring failed: {str(e)}"}
 
 
-# 内存清理端点
+# ==========================================
+# 内存清理
+# ==========================================
 @app.post("/api/memory/cleanup", tags=["System"])
 async def cleanup_idle_models():
-    """
-    清理闲置模型以释放内存
-    """
-    import time
-
+    """手动触发卸载闲置模型"""
     try:
-        from core.container import container
-
-        vector_store = container.vector_store()
+        vector_store = container.vector_store()  # 🔥 删除多余的 import
         unloaded_count = 0
 
-        # 卸载稀疏模型
         if hasattr(vector_store, "auto_unload_idle_models"):
             if vector_store.auto_unload_idle_models():
                 unloaded_count += 1
 
-        # 尝试卸载重排序模型（如果可用）
         try:
             hybrid_engine = container.hybrid_search_engine()
             if hasattr(hybrid_engine, "auto_unload_idle_models"):
                 if hybrid_engine.auto_unload_idle_models():
                     unloaded_count += 1
         except Exception as e:
-            import logging
-
-            logging.getLogger(__name__).warning(f"Failed to unload reranker model: {e}")
+            logger.warning(f"Failed to unload reranker model: {e}")
 
         return {
             "success": True,
@@ -290,6 +263,9 @@ async def cleanup_idle_models():
         return {"success": False, "error": str(e), "timestamp": time.time()}
 
 
+# ==========================================
+# 入口（生产用 Dockerfile CMD，不需要这个）
+# ==========================================
 if __name__ == "__main__":
     import uvicorn
 
@@ -298,16 +274,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=False,
-        # 🔥 关键修复：排除不需要监控的目录和文件
-        # 防止数据库写入或前端构建触发后端重启
-        reload_excludes=[
-            "web/*",  # 忽略前端目录
-            "storage/*",  # 忽略 Qdrant 存储 (如果有)
-            "*.db",  # 忽略 SQLite 数据库
-            "*.sqlite",
-            "*.pyc",
-            ".cache/*",  # 忽略缓存
-            "__pycache__/*",
-            ".git/*",
-        ],
+        # 🔥 删除了 reload_excludes（reload=False 时无效的死代码）
     )
