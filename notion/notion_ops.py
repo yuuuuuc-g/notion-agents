@@ -2,10 +2,14 @@
 notion/notion_ops.py
 [Infrastructure Decoupling Refactored]
 Notion 服务的具体实现类，支持依赖注入。
-✅ 升级 v5.0: 增加 '外科手术' (Block-Level) 操作能力
+✅ 升级 v5.1: 修复嵌套写入逻辑
+   - 修复浅拷贝导致 table.children 被错误提取的问题
+   - 使用 copy.deepcopy 确保数据完整性
+   - 统一嵌套写入策略：先写父块，再追加子块
 """
 
 import concurrent.futures
+import copy
 from typing import Dict, List, Optional
 
 import requests
@@ -32,30 +36,59 @@ class NotionService(INotionService):
         self.notion = Client(auth=token)
         self.default_db_id = default_db_id
 
-    # ... (保留原有的 _append_children_in_batches 方法) ...
+    # ==========================================
+    # 🔥 核心修复：_append_children_in_batches
+    # ==========================================
+    # Notion API 的严格规则：
+    #   blocks.children.append 的 children 参数，
+    #   每个 block 内部不能再嵌套 children（除了 table 的 table_row）
+    #
+    # 正确的写入策略：
+    #   Step 1: 写入当前层级的所有 block（去掉 children）
+    #   Step 2: 拿到 Step 1 返回的 block ID
+    #   Step 3: 对每个有子块的 block，递归执行 Step 1-3
+    #
+    # 特殊类型：
+    #   table: children 是 table_row，必须随 table 一起写入
+    #         不能单独追加，否则 API 报错
+    # ==========================================
+
     def _append_children_in_batches(self, parent_id: str, children: List[Dict]):
         if not children:
             return
 
-        batch_size = 50  # 从100降低到50，减少内存峰值和API请求大小
+        batch_size = 50
         for i in range(0, len(children), batch_size):
             batch = children[i : i + batch_size]
-            sub_children_map = {}
+
+            # 🔥 key fix: 用 deepcopy，避免浅拷贝修改原始数据
+            batch = copy.deepcopy(batch)
+
+            sub_children_map = {}  # {batch_index: [sub_blocks]}
             clean_batch = []
 
             for idx, block in enumerate(batch):
-                block_copy = block.copy()
-                b_type = block_copy.get("type")
+                b_type = block.get("type")
 
-                # table block 的 children 是 table 结构的一部分，不应该被移除
-                # Notion API 要求 table 必须包含 table.children 属性（即使为空列表）
-                if b_type != "table":
-                    if b_type and "children" in block_copy.get(b_type, {}):
-                        sub_children_map[idx] = block_copy[b_type].pop("children")
-                    elif "children" in block_copy:
-                        sub_children_map[idx] = block_copy.pop("children")
+                # 🔥 table 类型：children 是 table_row，必须保留
+                # Notion API 要求 table 和 table_row 一起写入
+                if b_type == "table":
+                    clean_batch.append(block)
+                    continue
 
-                clean_batch.append(block_copy)
+                # 其他类型：提取 children，后续单独追加
+                extracted = None
+
+                # 检查两种可能的 children 位置
+                if b_type and "children" in block.get(b_type, {}):
+                    extracted = block[b_type].pop("children")
+                elif "children" in block:
+                    extracted = block.pop("children")
+
+                if extracted:
+                    sub_children_map[idx] = extracted
+
+                clean_batch.append(block)
 
             try:
                 response = self.notion.blocks.children.append(
@@ -63,15 +96,24 @@ class NotionService(INotionService):
                 )
                 results = response.get("results", [])
 
+                # 递归追加子块
                 for batch_idx, sub_blocks in sub_children_map.items():
-                    new_parent_id = results[batch_idx]["id"]
-                    self._append_children_in_batches(new_parent_id, sub_blocks)
+                    if batch_idx < len(results):
+                        new_parent_id = results[batch_idx]["id"]
+                        self._append_children_in_batches(new_parent_id, sub_blocks)
+                    else:
+                        logger.warning(
+                            f"⚠️ [Notion] 子块追加跳过: batch_idx={batch_idx}, "
+                            f"results_len={len(results)}"
+                        )
 
             except Exception as e:
                 logger.error(f"❌ 追加 Block 失败: {e}")
                 raise e
 
-    # ... (保留原有的 fetch_database_content 方法) ...
+    # ==========================================
+    # fetch_database_content（保持不变）
+    # ==========================================
     def fetch_database_content(self, db_id: Optional[str] = None) -> List[Dict]:
         target_db = db_id if db_id else self.default_db_id
         if not target_db:
@@ -130,7 +172,6 @@ class NotionService(INotionService):
                         pages_data.append(
                             {"id": page_id, "title": title, "content": content}
                         )
-                        # logger.info(f"   - ✅ 抓取成功: {title}")
 
             return pages_data
 
@@ -138,64 +179,45 @@ class NotionService(INotionService):
             logger.error(f"❌ 数据库拉取通讯失败: {e}")
             raise e
 
-    # notion_ops.py 修复补丁
-    # 问题：创建页面时没有设置 Type 和 Tags 属性
-
+    # ==========================================
+    # create_page（v5.1 版本，带 Type + Tags）
+    # ==========================================
     def create_page(
         self,
         title: str,
         children: List[Dict],
         icon: str = "📄",
         db_id: str = None,
-        category: str = None,  # 🔥 新增：对应 Type 属性
-        tags: List[str] = None,  # 🔥 新增：对应 Tags 属性
+        category: str = None,
+        tags: List[str] = None,
     ) -> Dict:
-        """
-        创建 Notion 页面
-
-        Args:
-            title: 页面标题
-            children: 页面内容块
-            icon: 页面图标（emoji）
-            db_id: 目标 Database ID
-            category: 分类（将设置到 Type 属性）
-            tags: 标签列表（将设置到 Tags 属性）
-
-        Returns:
-            Notion API 响应
-        """
         target_db = db_id if db_id else self.default_db_id
         if not target_db:
             raise ValueError("❌ 未配置有效的 Database ID")
 
         logger.info(f"✍️ [Notion] 创建页面: {title} (分类: {category})")
-        page_id = None
 
         try:
-            # 1. 构建 properties
+            # 构建 properties
             properties = {"Name": {"title": [{"text": {"content": title}}]}}
 
-            # 🔥 添加 Type (分类) - select 类型
             if category:
                 properties["Type"] = {"select": {"name": category}}
-                logger.debug(f"   - Type: {category}")
 
-            # 🔥 添加 Tags (标签) - multi_select 类型
             if tags and isinstance(tags, list):
                 properties["Tags"] = {"multi_select": [{"name": tag} for tag in tags]}
-                logger.debug(f"   - Tags: {tags}")
 
-            # 2. 创建空页面（带属性）
+            # 创建空页面
             response = self.notion.pages.create(
                 parent={"database_id": target_db},
                 icon={"type": "emoji", "emoji": icon},
-                properties=properties,  # 🔥 包含 Type 和 Tags
+                properties=properties,
                 children=[],
             )
             page_id = response["id"]
             logger.info(f"✅ [Notion] 页面创建成功: {page_id}")
 
-            # 3. 追加内容
+            # 追加内容（使用修复后的方法）
             if children:
                 try:
                     self._append_children_in_batches(page_id, children)
@@ -211,17 +233,10 @@ class NotionService(INotionService):
             logger.error(f"❌ 页面任务失败: {e}")
             raise e
 
-    # =============================================================================
-    # 修改说明
-    # =============================================================================
-    # 1. 添加了 category 参数，映射到 Notion 的 Type 属性（select）
-    # 2. 添加了 tags 参数，映射到 Notion 的 Tags 属性（multi_select）
-    # 3. 在创建页面时设置这些属性
-    # 4. 添加了详细的日志记录
-
-    # ... (保留 delete_page, get_page_text, _delete_block_worker, overwrite_page_content) ...
+    # ==========================================
+    # delete_page, get_page_text, overwrite（保持不变）
+    # ==========================================
     def delete_page(self, page_id: str) -> bool:
-        """归档页面"""
         try:
             self.notion.pages.update(page_id=page_id, archived=True)
             return True
@@ -230,7 +245,6 @@ class NotionService(INotionService):
             return False
 
     def get_page_text(self, page_id: str) -> str:
-        """提取页面文本内容"""
         try:
             response = self.notion.blocks.children.list(block_id=page_id)
             blocks = response.get("results", [])
@@ -246,6 +260,18 @@ class NotionService(INotionService):
                     text_objs = b["code"].get("rich_text", [])
                     code = "".join([t.get("plain_text", "") for t in text_objs])
                     lines.append(f"```\n{code}\n```")
+                elif b_type == "table":
+                    # 🔥 table 的文本提取
+                    table_rows = b.get("table", {}).get("children", [])
+                    for row in table_rows:
+                        cells = row.get("table_row", {}).get("cells", [])
+                        cell_texts = []
+                        for cell in cells:
+                            cell_text = "".join(
+                                [rt.get("plain_text", "") for rt in cell]
+                            )
+                            cell_texts.append(cell_text)
+                        lines.append(" | ".join(cell_texts))
             return "\n\n".join(lines)
         except Exception as e:
             logger.error(f"❌ 读取内容失败: {e}")
@@ -260,10 +286,8 @@ class NotionService(INotionService):
     def overwrite_page_content(
         self, page_id: str, markdown_body: str, summary: str = None
     ) -> bool:
-        """清空并覆盖页面"""
         logger.info(f"♻️ 重写页面: {page_id}")
         try:
-            # 1. 列出所有 Block
             all_block_ids = []
             has_more = True
             start_cursor = None
@@ -275,12 +299,10 @@ class NotionService(INotionService):
                 has_more = res.get("has_more")
                 start_cursor = res.get("next_cursor")
 
-            # 2. 并发删除
             if all_block_ids:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                     executor.map(self._delete_block_worker, all_block_ids)
 
-            # 3. 构造并写入新内容
             new_children = markdown_to_blocks(markdown_body)
             self._append_children_in_batches(page_id, new_children)
             return True
@@ -289,14 +311,9 @@ class NotionService(INotionService):
             return False
 
     # ==========================================
-    # 🔥 新增：外科手术式操作能力 (Surgical Capabilities)
+    # 🔥 外科手术式操作（保持不变）
     # ==========================================
-
     def get_page_structure(self, page_id: str) -> List[Dict]:
-        """
-        获取页面的 Block 结构树（ID + 文本摘要）。
-        AI 需要通过这个方法拿到每一段话对应的 block_id，才能进行修改。
-        """
         logger.info(f"🔍 [Surgical] 扫描页面结构: {page_id}")
         blocks = []
         has_more = True
@@ -310,18 +327,16 @@ class NotionService(INotionService):
                 for b in res["results"]:
                     b_type = b["type"]
                     content = ""
-                    # 提取富文本内容
                     if "rich_text" in b.get(b_type, {}):
                         content = "".join(
                             [t["plain_text"] for t in b[b_type]["rich_text"]]
                         )
-
-                    if content:  # 只返回有内容的块
+                    if content:
                         blocks.append(
                             {
                                 "block_id": b["id"],
                                 "type": b_type,
-                                "content_preview": content[:200],  # 取前200字做指纹
+                                "content_preview": content[:200],
                             }
                         )
                 has_more = res["has_more"]
@@ -332,12 +347,8 @@ class NotionService(INotionService):
             return []
 
     def update_block_text(self, block_id: str, new_text: str):
-        """
-        外科手术：修改指定 Block 的文本内容
-        """
         logger.info(f"🔪 [Surgical] 更新 Block {block_id}...")
         try:
-            # 默认尝试更新 paragraph，这是最常见的类型
             self.notion.blocks.update(
                 block_id=block_id,
                 paragraph={"rich_text": [{"text": {"content": new_text}}]},
@@ -351,9 +362,6 @@ class NotionService(INotionService):
     def insert_blocks_after(
         self, parent_id: str, after_block_id: str, content_markdown: str
     ):
-        """
-        精准插入：在某个 Block 之后插入新内容
-        """
         logger.info(f"💉 [Surgical] 在 {after_block_id} 后插入内容...")
         try:
             new_blocks = markdown_to_blocks(content_markdown)

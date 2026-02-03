@@ -1,13 +1,17 @@
 """
 notion/block_builder.py
-Master Final Edition: 补齐缺失引用，恢复全量 Block 支持
+Master Final Edition v2: 修复嵌套和表格写入问题
+修复内容：
+  1. numbered_list_item 添加为 container（支持嵌套）
+  2. _flush_table 的 table_row 添加 "object": "block"
+  3. 嵌套深度限制对齐 Notion API（最大 3 层子块）
+  4. 表格解析更加严格（处理边界情况）
 """
 import re
 from typing import Any, Dict, List, Optional
 
 
 def _safe_str(val: Any) -> str:
-    """补回缺失的辅助函数，用于安全转换字符串"""
     if val is None:
         return ""
     return str(val).strip()
@@ -18,12 +22,10 @@ def parse_rich_text(text: str) -> List[Dict[str, Any]]:
     if not text:
         return [{"type": "text", "text": {"content": " "}}]
 
-    # 物理限制保护
     if len(text) > 2000:
         text = text[:1990] + "..."
 
     rich_text: List[Dict[str, Any]] = []
-    # 匹配公式、加粗、代码、链接、斜体、删除线
     pattern = re.compile(
         r"(`[^`]+`|\$[^\$]+\$|\[[^\]]+\]\([^\)]+\)|\*\*.+?\*\*|\*[^\*]+\*|~[^~]+~)"
     )
@@ -71,49 +73,73 @@ def parse_rich_text(text: str) -> List[Dict[str, Any]]:
 
 
 def _flush_table(table_rows: List[List[str]]) -> Optional[Dict[str, Any]]:
-    """处理表格解析"""
+    """
+    处理表格解析
+    🔥 修复：table_row 添加 "object": "block"
+    """
     if not table_rows:
         return None
+
     width = max(len(row) for row in table_rows)
     table_children: List[Dict[str, Any]] = []
+
     for row in table_rows:
         cells = (row + [""] * width)[:width]
         notion_cells = [parse_rich_text(cell) for cell in cells]
         table_children.append(
-            {"type": "table_row", "table_row": {"cells": notion_cells}}
+            {
+                "object": "block",  # 🔥 新增
+                "type": "table_row",
+                "table_row": {"cells": notion_cells},
+            }
         )
+
     return {
         "object": "block",
         "type": "table",
         "table": {
             "table_width": width,
             "has_column_header": True,
-            "children": table_children,
+            "children": table_children,  # table_row 随 table 一起写入
         },
     }
+
+
+def _is_separator_row(cells: List[str]) -> bool:
+    """
+    判断是否是表格分隔行
+    例如：|---|---|---| 或 |:---|:---:|---:|
+    """
+    if not cells:
+        return False
+    return all(re.match(r"^[-:| ]+$", c) for c in cells if c.strip())
 
 
 def markdown_to_blocks(markdown_text: str) -> List[Dict[str, Any]]:
     if not markdown_text:
         return []
+
     lines = markdown_text.split("\n")
     root_blocks: List[Dict[str, Any]] = []
-    # Explicit type for stack
     stack: List[Dict[str, Any]] = [{"children": root_blocks, "indent": -1}]
 
     # 状态机变量
     code_mode: bool = False
     math_mode: bool = False
     code_content: List[str] = []
+    code_language: str = "plain text"
     math_content: List[str] = []
     table_rows: List[List[str]] = []
 
     for line in lines:
         stripped = line.strip()
 
-        # 1. 特殊块判定 (优先级最高)
+        # =====================
+        # 1. 代码块
+        # =====================
         if stripped.startswith("```"):
             if code_mode:
+                # 代码块结束
                 content: str = "\n".join(code_content)
                 stack[-1]["children"].append(
                     {
@@ -123,19 +149,53 @@ def markdown_to_blocks(markdown_text: str) -> List[Dict[str, Any]]:
                             "rich_text": [
                                 {"type": "text", "text": {"content": content[:2000]}}
                             ],
-                            "language": "plain text",
+                            "language": code_language,
                         },
                     }
                 )
                 code_mode = False
                 code_content = []
+                code_language = "plain text"
             else:
+                # 代码块开始，提取语言标识
                 code_mode = True
-                continue
+                lang = stripped[3:].strip().lower()
+                # Notion 支持的语言列表（部分）
+                supported = [
+                    "python",
+                    "javascript",
+                    "typescript",
+                    "java",
+                    "c",
+                    "c++",
+                    "css",
+                    "html",
+                    "json",
+                    "markdown",
+                    "sql",
+                    "shell",
+                    "bash",
+                    "ruby",
+                    "go",
+                    "rust",
+                    "swift",
+                    "kotlin",
+                    "php",
+                    "scala",
+                    "r",
+                    "matlab",
+                    "plain text",
+                ]
+                code_language = lang if lang in supported else "plain text"
+            continue
+
         if code_mode:
             code_content.append(line)
             continue
 
+        # =====================
+        # 2. 数学块
+        # =====================
         if stripped.startswith("$$"):
             if math_mode:
                 stack[-1]["children"].append(
@@ -150,25 +210,40 @@ def markdown_to_blocks(markdown_text: str) -> List[Dict[str, Any]]:
             else:
                 math_mode = True
             continue
+
         if math_mode:
             math_content.append(line)
             continue
 
-        if stripped.startswith("|"):
+        # =====================
+        # 3. 表格
+        # =====================
+        if stripped.startswith("|") and stripped.endswith("|"):
             cells: List[str] = [c.strip() for c in stripped.strip("|").split("|")]
-            if not all(re.match(r"^[-: ]+$", c) for c in cells if c):
-                table_rows.append(cells)
-            continue
-        elif table_rows:
-            t = _flush_table(table_rows)
-            if t:
-                stack[-1]["children"].append(t)
-            table_rows = []
 
+            # 跳过分隔行 |---|---|---|
+            if _is_separator_row(cells):
+                continue
+
+            table_rows.append(cells)
+            continue
+        else:
+            # 当前行不是表格行，如果之前有积累的表格数据，flush 它
+            if table_rows:
+                t = _flush_table(table_rows)
+                if t:
+                    stack[-1]["children"].append(t)
+                table_rows = []
+
+        # =====================
+        # 4. 空行跳过
+        # =====================
         if not stripped:
             continue
 
-        # 2. 嵌套缩进处理
+        # =====================
+        # 5. 缩进处理
+        # =====================
         indent = (len(line) - len(line.lstrip())) // 2
         while len(stack) > 1 and indent <= stack[-1]["indent"]:
             stack.pop()
@@ -176,7 +251,9 @@ def markdown_to_blocks(markdown_text: str) -> List[Dict[str, Any]]:
         new_block: Optional[Dict[str, Any]] = None
         is_container: bool = False
 
-        # 3. 标题识别与自动降级 (解决 #### 问题)
+        # =====================
+        # 6. 标题（####+ 自动降级为 heading_3）
+        # =====================
         if stripped.startswith("# "):
             new_block = {
                 "type": "heading_1",
@@ -187,7 +264,7 @@ def markdown_to_blocks(markdown_text: str) -> List[Dict[str, Any]]:
                 "type": "heading_2",
                 "heading_2": {"rich_text": parse_rich_text(stripped[3:])},
             }
-        elif stripped.startswith("### ") or stripped.startswith("#### "):
+        elif stripped.startswith("### ") or stripped.startswith("####"):
             new_block = {
                 "type": "heading_3",
                 "heading_3": {
@@ -195,19 +272,46 @@ def markdown_to_blocks(markdown_text: str) -> List[Dict[str, Any]]:
                 },
             }
 
-        # 4. 列表与引用
+        # =====================
+        # 7. 列表 + 引用（container，支持嵌套）
+        # =====================
         elif re.match(r"^[-*]\s+", stripped):
             new_block = {
                 "type": "bulleted_list_item",
                 "bulleted_list_item": {"rich_text": parse_rich_text(stripped[2:])},
             }
             is_container = True
+
+        # 🔥 新增：numbered_list_item 也是 container
+        elif re.match(r"^\d+\.\s+", stripped):
+            # 提取编号后的内容
+            content_text = re.sub(r"^\d+\.\s+", "", stripped)
+            new_block = {
+                "type": "numbered_list_item",
+                "numbered_list_item": {"rich_text": parse_rich_text(content_text)},
+            }
+            is_container = True
+
         elif stripped.startswith("> "):
             new_block = {
                 "type": "quote",
                 "quote": {"rich_text": parse_rich_text(stripped[2:])},
             }
             is_container = True
+
+        # =====================
+        # 8. 分割线
+        # =====================
+        elif stripped in ("---", "***", "___"):
+            new_block = {
+                "object": "block",
+                "type": "divider",
+                "divider": {},
+            }
+
+        # =====================
+        # 9. 默认：段落
+        # =====================
         else:
             new_block = {
                 "type": "paragraph",
@@ -217,17 +321,25 @@ def markdown_to_blocks(markdown_text: str) -> List[Dict[str, Any]]:
         if new_block:
             new_block["object"] = "block"
             stack[-1]["children"].append(new_block)
-            # 限制嵌套深度为 3，确保 API 稳健
-            if is_container and len(stack) < 3:
+
+            # 🔥 嵌套深度限制：Notion API 最多支持 3 层子块
+            # stack 长度 = 当前嵌套深度 + 1（根层）
+            # 所以 len(stack) < 4 才能继续嵌套
+            if is_container and len(stack) < 4:
                 new_block["children"] = []
                 stack.append({"children": new_block["children"], "indent": indent})
 
-    # 清理残留表格
+    # =====================
+    # 清理残留表格（文件末尾没有空行的情况）
+    # =====================
     if table_rows:
         t = _flush_table(table_rows)
         if t:
             stack[-1]["children"].append(t)
 
+    # =====================
+    # 清理空的 children 数组
+    # =====================
     def _clean(blocks: List[Dict[str, Any]]) -> None:
         for b in blocks:
             if "children" in b:
