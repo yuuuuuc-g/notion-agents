@@ -137,7 +137,24 @@ async def manage_notion_note(
             force_create=True  # ← 跳过查重
         )
     """
-    print(f"✍️ [Tool] 动作: {action.upper()} | 标题: {title} | 分类: {category}")
+
+    # ═══════════════════════════════════════════════════════
+    # 🛡️ 步骤 0: 参数验证（防止AI编造内容）
+    # ═══════════════════════════════════════════════════════
+    from tools.validation import validate_notion_params
+
+    validation_error = validate_notion_params(
+        content_markdown=content_markdown,
+        title=title,
+        action=action,
+        min_content_length=10,  # 最少10个字符
+    )
+
+    if validation_error:
+        print(f"⚠️ [Tool] 参数验证失败: {validation_error[:100]}...")
+        return validation_error  # AI 会看到这个消息并询问用户
+
+    print(f"✍️ [Tool] 动作: {action.upper()} | 标题: {title}")
 
     # =============================
     # 1. 验证分类参数
