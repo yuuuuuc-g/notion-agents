@@ -1,21 +1,12 @@
 """
 tools/validation.py
 工具参数运行时验证 - 防止AI编造内容的最后一道防线
+版本: v1.1 - 修复误判问题
 
-使用方法：
-    from tools.validation import validate_notion_params
-
-    @tool
-    async def manage_notion_note(...):
-        # 在工具函数开头添加验证
-        validation_error = validate_notion_params(
-            content_markdown=content_markdown,
-            title=title
-        )
-        if validation_error:
-            return validation_error  # 返回错误消息，不执行工具
-
-        # ... 原有逻辑
+修复记录:
+- 放宽 TODO 检测（只拦截孤立的 TODO，不拦截列表项）
+- 放宽标题黑名单（移除 'test'，太常见）
+- 改进上下文检测（避免误判真实内容）
 """
 
 import re
@@ -56,14 +47,12 @@ def validate_notion_params(
     # 检查 2: 通用占位符模式
     # ===================================================================
     PLACEHOLDER_PATTERNS = [
-        r"placeholder",
-        r"example content",
-        r"sample text",
-        r"lorem ipsum",
-        r"test content",
+        r"\bplaceholder\b",  # 精确匹配单词边界
+        r"\bexample content\b",
+        r"\bsample text\b",
+        r"\blorem ipsum\b",
         r"待补充",
         r"稍后填写",
-        r"TODO",
         r"\[content here\]",
         r"\[insert.*here\]",
     ]
@@ -78,6 +67,42 @@ def validate_notion_params(
             )
 
     # ===================================================================
+    # 检查 2.5: TODO 特殊处理（放宽检测）
+    # ===================================================================
+    # 只拦截孤立的 TODO（真正的占位符），不拦截列表项中的 TODO
+    # ❌ 拦截: "TODO: add content later" (孤立)
+    # ✅ 允许: "- TODO: Buy groceries" (列表项)
+
+    # 检查是否是孤立的 TODO（不在列表上下文中）
+    lines = content_markdown.split("\n")
+    for line in lines:
+        stripped = line.strip()
+        # 检查是否是纯 TODO 占位符（不是列表项）
+        if re.match(r"^TODO\s*[:：]?\s*(.{0,30})$", stripped, re.IGNORECASE):
+            # 进一步检查后面的内容是否是占位符
+            match = re.match(r"^TODO\s*[:：]?\s*(.*)$", stripped, re.IGNORECASE)
+            if match:
+                todo_content = match.group(1).lower()
+                placeholder_indicators = [
+                    "add",
+                    "fill",
+                    "insert",
+                    "write",
+                    "complete",
+                    "later",
+                    "here",
+                    "待",
+                    "补充",
+                    "填写",
+                ]
+                if any(ind in todo_content for ind in placeholder_indicators):
+                    return (
+                        "❌ 检测到占位符内容：'TODO'\n"
+                        "请提供用户的实际内容，而不是示例或占位符。\n"
+                        "如果用户没有提供具体内容，请先询问他们想要保存什么。"
+                    )
+
+    # ===================================================================
     # 检查 3: AI 常见的编造模式
     # ===================================================================
     # AI 经常生成这种格式："# Topic\n- Example 1\n- Example 2"
@@ -88,17 +113,15 @@ def validate_notion_params(
     if len(lines) <= 5:  # 短内容更可能是编造
         # 检查是否全是标题+列表项（没有实际解释）
         has_header = any(line.strip().startswith("#") for line in lines)
-        list_items = sum(
-            1 for line in lines if line.strip().startswith(("-", "*", "•"))
-        )
+        list_items = sum(1 for line in lines if re.match(r"^\s*[-*•]\s+", line))
 
         if has_header and list_items >= 2:
             # 进一步检查：列表项是否过于简单（无解释）
             simple_items = 0
             for line in lines:
-                if line.strip().startswith(("-", "*", "•")):
+                if re.match(r"^\s*[-*•]\s+", line):
                     # 移除列表符号后
-                    item_content = re.sub(r"^[-*•]\s*", "", line.strip())
+                    item_content = re.sub(r"^\s*[-*•]\s*", "", line.strip())
                     # 如果列表项少于15个字符，且没有冒号/句号，可能是编造
                     if (
                         len(item_content) < 15
@@ -110,32 +133,38 @@ def validate_notion_params(
             if simple_items >= 2:
                 return (
                     "⚠️ 内容可能过于简化（标题+简短列表项，无详细说明）。\n"
-                    + "这看起来像是AI生成的示例框架，而不是用户的实际内容。\n\n"
-                    + "请确认：\n"
-                    + "1. 用户是否提供了这些具体的列表项？\n"
-                    + "2. 是否遗漏了用户提供的详细说明或例句？\n\n"
-                    + "如果用户只提供了主题但没有细节，请先询问他们想要记录哪些具体信息。"
+                    "这看起来像是AI生成的示例框架，而不是用户的实际内容。\n\n"
+                    "请确认：\n"
+                    "1. 用户是否提供了这些具体的列表项？\n"
+                    "2. 是否遗漏了用户提供的详细说明或例句？\n\n"
+                    "如果用户只提供了主题但没有细节，请先询问他们想要记录哪些具体信息。"
                 )
 
     # ===================================================================
     # 检查 4: 标题验证
     # ===================================================================
     if not title or len(title.strip()) < 2:
-        return "❌ 标题不能为空或过短。\n" + "请提供一个有意义的标题，或询问用户他们希望如何命名这个笔记。"
+        return "❌ 标题不能为空或过短。\n" "请提供一个有意义的标题，或询问用户他们希望如何命名这个笔记。"
 
     # 检查标题是否是占位符
+    # 🔥 修复：移除 'test'（太常见，容易误判）
     title_lower = title.lower().strip()
-    if title_lower in ["untitled", "new note", "note", "test", "新笔记", "无标题"]:
+    placeholder_titles = ["untitled", "new note", "note", "新笔记", "无标题"]
+
+    if title_lower in placeholder_titles:
         return f"❌ 标题 '{title}' 看起来像占位符。\n" f"请使用描述实际内容的标题，或询问用户想要什么标题。"
 
     # ===================================================================
     # 检查 5: 元数据泄露（AI 常见错误）
     # ===================================================================
     # AI 有时会把 title/summary 写进 content 里
-    if re.search(r"^(title|标题):\s*", content_markdown, re.IGNORECASE | re.MULTILINE):
+    # 🔥 修复：更精确的检测（必须在行首）
+    if re.search(
+        r"^(title|标题)\s*[:：]\s*", content_markdown, re.IGNORECASE | re.MULTILINE
+    ):
         return (
             "⚠️ 内容中包含 'Title:' 字段，这是元数据泄露。\n"
-            + "请只保存笔记正文，不要包含 'Title:', 'Summary:' 等元数据标签。"
+            "请只保存笔记正文，不要包含 'Title:', 'Summary:' 等元数据标签。"
         )
 
     # ===================================================================
@@ -201,24 +230,46 @@ if __name__ == "__main__":
         },
         {
             "content": "Title: My Note\n\nSome content",
-            "title": "Test",
+            "title": "My Test",  # 🔥 修复：改为 "My Test" 不在黑名单中
             "should_fail": True,
             "reason": "元数据泄露",
         },
-        {"content": "Short", "title": "Test", "should_fail": True, "reason": "内容过短"},
+        {
+            "content": "Short",
+            "title": "My Note",  # 🔥 修复：使用非占位符标题
+            "should_fail": True,
+            "reason": "内容过短",
+        },
+        {
+            "content": "# My Daily Tasks\n- TODO: Buy groceries\n- TODO: Call dentist\n\nThese are my real tasks.",
+            "title": "Daily TODO List",
+            "should_fail": False,
+            "reason": "真实的 TODO 列表（有上下文）",
+        },
     ]
 
     print("运行验证测试...\n")
+    passed = 0
+    failed = 0
+
     for i, case in enumerate(test_cases, 1):
         result = validate_notion_params(
             content_markdown=case["content"], title=case["title"]
         )
 
-        passed = (result is not None) == case["should_fail"]
-        status = "✅ PASS" if passed else "❌ FAIL"
+        is_pass = (result is not None) == case["should_fail"]
+        status = "✅ PASS" if is_pass else "❌ FAIL"
+
+        if is_pass:
+            passed += 1
+        else:
+            failed += 1
 
         print(f"Test {i}: {status}")
         print(f"  原因: {case['reason']}")
-        if result:
-            print(f"  验证消息: {result[:100]}...")
+        print(f"  预期失败: {case['should_fail']}, 实际失败: {result is not None}")
+        if result and not is_pass:
+            print(f"  意外错误: {result[:100]}...")
         print()
+
+    print(f"\n总计: {passed} passed, {failed} failed")
