@@ -65,7 +65,7 @@ async def test_manage_notion_note_create():
             {
                 "action": "create",
                 "title": "Test Note",
-                "content_markdown": "Content",
+                "content_markdown": "This is a valid long content string that passes validation.",
                 "summary": "Summary",
                 "category": "General",
             },
