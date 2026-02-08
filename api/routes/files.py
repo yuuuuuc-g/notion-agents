@@ -22,15 +22,12 @@ from api.dependencies import (
 from middleware.auth import verify_token
 from middleware.bandwidth_limiter import BandwidthLimiter
 from middleware.error_handler import BusinessException
-from server import limiter
 from services.archive_service import ArchiveService
 from services.file_parser import extract_text_from_upload_file
 from utils.cache_fallback import CacheWithFallback
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Files"])
-
-MAX_FILES_COUNT = 10
 
 MAX_FILES_COUNT = 10
 
@@ -42,14 +39,19 @@ class ArchiveRequest(BaseModel):
 
 
 @router.post("/upload", dependencies=[Depends(verify_token)])
-@limiter.limit("10/minute")
 async def upload_files(
     request: Request,
     files: List[UploadFile] = File(...),
     cache: CacheWithFallback = Depends(get_cache_wrapper),
     bandwidth_limiter: BandwidthLimiter = Depends(get_bandwidth_limiter),
 ):
+    # 速率限制检查
     client_ip = get_remote_address(request) or "127.0.0.1"
+    try:
+        limiter = request.app.state.limiter
+        await limiter.check(client_ip, 1)  # 简单的请求计数
+    except AttributeError:
+        pass  # limiter 未配置，跳过
 
     if len(files) > MAX_FILES_COUNT:
         raise HTTPException(status_code=413, detail="Too many files.")
@@ -88,7 +90,6 @@ async def upload_files(
 
 
 @router.post("/archive", dependencies=[Depends(verify_token)])
-@limiter.limit("5/minute")
 async def archive_endpoint(
     request: Request,
     req: ArchiveRequest,
@@ -96,6 +97,14 @@ async def archive_endpoint(
     archive_service: ArchiveService = Depends(get_archive_service),
     cache: CacheWithFallback = Depends(get_cache_wrapper),
 ):
+    # 速率限制检查
+    client_ip = get_remote_address(request) or "127.0.0.1"
+    try:
+        limiter = request.app.state.limiter
+        await limiter.check(client_ip, 1)
+    except AttributeError:
+        pass
+
     if not cache.exists(req.file_id):
         raise HTTPException(status_code=404, detail="Session expired or not found.")
 
