@@ -17,6 +17,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from config.settings import SETTINGS
 from core.container import container
@@ -24,6 +26,9 @@ from middleware.bandwidth_limiter import BandwidthLimiterMiddleware
 from middleware.error_handler import register_exception_handlers
 from middleware.metrics import PrometheusMiddleware, metrics_endpoint
 from utils.logger import setup_logging
+
+# 🔥 全局 SlowAPI Limiter 实例（供路由使用）
+limiter = Limiter(key_func=get_remote_address)
 
 # 路由导入
 try:
@@ -116,6 +121,9 @@ app = FastAPI(
     description="AI Second Brain with Notion & Qdrant Integration",
     lifespan=lifespan,
 )
+
+# 🔥 将 Limiter 挂载到 app.state（供路由使用）
+app.state.limiter = limiter
 
 # 中间件
 app.add_middleware(

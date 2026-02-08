@@ -12,7 +12,6 @@ from fastapi import (
     UploadFile,
 )
 from pydantic import BaseModel
-from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from api.dependencies import (
@@ -23,6 +22,7 @@ from api.dependencies import (
 from middleware.auth import verify_token
 from middleware.bandwidth_limiter import BandwidthLimiter
 from middleware.error_handler import BusinessException
+from server import limiter
 from services.archive_service import ArchiveService
 from services.file_parser import extract_text_from_upload_file
 from utils.cache_fallback import CacheWithFallback
@@ -30,10 +30,7 @@ from utils.cache_fallback import CacheWithFallback
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Files"])
 
-# ⚠️ 注意：Limiter 需要在 server.py 初始化并挂载到 app.state
-# 这里我们创建一个占位符，或者通过 Depends 获取
-# 为了简单，这里暂不使用装饰器限流，或使用全局 Limiter
-limiter = Limiter(key_func=get_remote_address)
+MAX_FILES_COUNT = 10
 
 MAX_FILES_COUNT = 10
 
@@ -44,7 +41,7 @@ class ArchiveRequest(BaseModel):
     thread_id: str = "default"
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(verify_token)])
 @limiter.limit("10/minute")
 async def upload_files(
     request: Request,

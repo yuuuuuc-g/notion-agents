@@ -1,14 +1,15 @@
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import RootLayout from './layout';
 
 // Mock next/font since it's not available in test environment
-jest.mock('next/font/google', () => ({
-  Geist: jest.fn().mockReturnValue({ variable: '--font-geist-sans' }),
-  Geist_Mono: jest.fn().mockReturnValue({ variable: '--font-geist-mono' }),
+vi.mock('next/font/google', () => ({
+  Geist: vi.fn().mockReturnValue({ variable: '--font-geist-sans' }),
+  Geist_Mono: vi.fn().mockReturnValue({ variable: '--font-geist-mono' }),
 }));
 
 // Mock CSS import
-jest.mock('./globals.css', () => ({}));
+vi.mock('./globals.css', () => ({}));
 
 describe('RootLayout', () => {
   it('renders children within html and body tags', () => {

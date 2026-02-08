@@ -49,6 +49,8 @@ async def search_node(state: ConversationalSearchState) -> ConversationalSearchS
     """
     搜索节点 - 执行混合检索
     """
+    import asyncio
+
     from core.container import container
 
     query = state["query"]
@@ -60,11 +62,9 @@ async def search_node(state: ConversationalSearchState) -> ConversationalSearchS
 
         # 执行搜索 (多取一些结果用于主题分析)
         if hasattr(vector_store, "search_with_context"):
-            # 🔥 修复：search_with_context 是同步方法，不能加 await
-            # 虽然 vector_store 内部使用了异步的 search_engine (在旧版本)，
-            # 但 vector_store.py 中暴露的 search_with_context 封装了 loop.run_until_complete 或者本身就是同步的。
-            # 根据 Turn 31 的最终代码，它是 def search_with_context(...) -> 同步方法。
-            search_resp = vector_store.search_with_context(
+            # 🔥 修复：使用 asyncio.to_thread 包装同步方法，避免阻塞 Event Loop
+            search_resp = await asyncio.to_thread(
+                vector_store.search_with_context,
                 query=query,
                 top_k=20,  # 取更多结果以便分析
             )
@@ -72,7 +72,11 @@ async def search_node(state: ConversationalSearchState) -> ConversationalSearchS
             results = search_resp.get("results", [])
         else:
             # 降级到普通搜索 (也是同步方法)
-            search_result = vector_store.search_memory(query_text=query, n_results=20)
+            search_result = await asyncio.to_thread(
+                vector_store.search_memory,
+                query_text=query,
+                n_results=20,
+            )
             results = []
             if search_result.get("match"):
                 # 兼容旧接口，构造列表

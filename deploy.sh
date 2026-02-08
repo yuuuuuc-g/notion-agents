@@ -150,10 +150,10 @@ fi
 # 运行测试
 echo ""
 echo "📌 运行测试..."
-if python test_biobrain.py; then
+if python -m pytest tests/ -v --tb=short; then
     echo -e "${GREEN}✅ 测试通过${NC}"
 else
-    echo -e "${YELLOW}⚠️  测试发现问题，请查看 test_report.json${NC}"
+    echo -e "${YELLOW}⚠️  测试发现问题，请查看测试输出${NC}"
 fi
 
 # 完成

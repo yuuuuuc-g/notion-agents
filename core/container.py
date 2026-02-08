@@ -74,8 +74,8 @@ class Container:
         cfg = self.config()
         return ChatOpenAI(
             model=model or cfg.LLM_MODEL_NAME,
-            openai_api_key=cfg.OPENAI_API_KEY,
-            openai_api_base=cfg.OPENAI_BASE_URL,
+            openai_api_key=cfg.MOONSHOT_API_KEY,
+            openai_api_base=cfg.MOONSHOT_BASE_URL,
             streaming=True,
             timeout=120,
             max_retries=2,

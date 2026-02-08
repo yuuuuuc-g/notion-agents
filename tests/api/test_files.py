@@ -4,13 +4,13 @@ tests/api/test_files.py
 """
 
 
-def test_upload_file_success(client, mock_container):
+def test_upload_file_success(client, auth_headers, mock_container):
     # 模拟 Cache 写入成功
     mock_cache = mock_container.cache_wrapper()
     mock_cache.setex.return_value = True
 
     files = {"files": ("test.txt", b"content", "text/plain")}
-    response = client.post("/api/upload", files=files)
+    response = client.post("/api/upload", files=files, headers=auth_headers)
     assert response.status_code == 200
     assert "file_id" in response.json()
 
