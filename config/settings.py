@@ -29,7 +29,11 @@ class Settings(BaseSettings):
     # === 2. 思考大脑 (LLM) ===
     MOONSHOT_API_KEY: Optional[str] = None
     MOONSHOT_BASE_URL: str = "https://api.moonshot.cn/v1"
-    LLM_MODEL_NAME: str = "kimi-k2.5"
+
+    DEEPSEEK_API_KEY: Optional[str] = None
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+
+    LLM_MODEL_NAME: str = "deepseek-chat"
 
     # === 3. 记忆向量 (Embedding - 硅基流动) ===
     SILICON_KEY: Optional[str] = None
