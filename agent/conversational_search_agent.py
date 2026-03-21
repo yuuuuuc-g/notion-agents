@@ -68,6 +68,14 @@ async def search_node(state: ConversationalSearchState) -> ConversationalSearchS
                 query=query,
                 top_k=20,  # 取更多结果以便分析
             )
+            # 中文说明：下游向量检索若返回 error，必须显式转成 error 响应，让 Tool 能把故障反馈给 LLM 做纠错
+            if isinstance(search_resp, dict) and search_resp.get("error"):
+                return {
+                    **state,
+                    "search_results": [],
+                    "response_type": "error",
+                    "metadata": {"error": search_resp.get("error")},
+                }
             # search_with_context 返回的是字典，包含 match 和 results
             results = search_resp.get("results", [])
         else:

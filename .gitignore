@@ -91,3 +91,4 @@ biobrain_complete_export_*.txt
 # 数据库文件
 *.sqlite
 biobrain_complete_export_*.txt
+.gitnexus

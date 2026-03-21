@@ -14,6 +14,7 @@ from typing import Dict, List, Optional
 
 import requests
 from notion_client import Client
+from requests.exceptions import Timeout as RequestsTimeout
 
 from utils.logger import get_logger
 
@@ -142,7 +143,8 @@ class NotionService(INotionService):
                 if next_cursor:
                     payload["start_cursor"] = next_cursor
 
-                response = requests.post(url, headers=headers, json=payload)
+                # 中文说明：Notion API 请求必须设置超时，避免网络卡死导致线程长期占用（同步被 asyncio.to_thread 包裹时尤甚）
+                response = requests.post(url, headers=headers, json=payload, timeout=10)
 
                 if response.status_code != 200:
                     logger.error(
@@ -175,6 +177,9 @@ class NotionService(INotionService):
 
             return pages_data
 
+        except RequestsTimeout as e:
+            logger.error(f"⏱️ Notion API 请求超时 (timeout=10s): {e}")
+            raise e
         except Exception as e:
             logger.error(f"❌ 数据库拉取通讯失败: {e}")
             raise e

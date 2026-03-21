@@ -1,6 +1,6 @@
 import { defineConfig, globalIgnores } from "eslint/config";
-import nextVitals from "eslint-config-next/core-web-vitals";
-import nextTs from "eslint-config-next/typescript";
+import nextVitals from "eslint-config-next/core-web-vitals.js"; // 👈 这里加上了 .js
+import nextTs from "eslint-config-next/typescript.js";        // 👈 这里也顺手加上 .js 防雷
 
 const eslintConfig = defineConfig([
   ...nextVitals,

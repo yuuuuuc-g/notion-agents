@@ -634,8 +634,12 @@ class LevelChunkVectorStore(IVectorStore):
             }
 
         except Exception as e:
+            # 中文说明：向量检索异常不能伪装成“空结果”，否则上层会误判为没搜到而非系统故障，LLM 无法纠错
             logger.error(f"❌ Hybrid Search Failed: {e}")
-            return {"match": False, "results": []}
+            return {
+                "match": False,
+                "error": f"向量检索系统异常: {str(e)}",
+            }
 
     def page_exists(self, page_id: str) -> bool:
         try:

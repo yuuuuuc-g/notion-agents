@@ -35,26 +35,35 @@ async def search_knowledge_base(query: str) -> str:
     Returns:
         JSON 格式的搜索结果
     """
-    print(f"🕵️ [Tool] 正在检索向量库 (Lite): {query}...")
+    # 中文说明：Tool 必须永远返回可解析的 JSON，避免异常冒泡导致 LLM 只看到“工具崩了”而无法纠错
+    try:
+        print(f"🕵️ [Tool] 正在检索向量库 (Lite): {query}...")
 
-    vector_store = container.vector_store()
-    result = await asyncio.to_thread(vector_store.search_memory, query, domain="All")
+        vector_store = container.vector_store()
+        result = await asyncio.to_thread(
+            vector_store.search_memory, query, domain="All"
+        )
 
-    if result.get("match"):
+        if result.get("match"):
+            return json.dumps(
+                {
+                    "found": True,
+                    "title": result.get("title"),
+                    "page_id": result.get("page_id"),
+                    "score": result.get("distance", 0.0),
+                    "domain": result.get("domain", "General"),
+                    "existing_content": result.get("metadata", {}).get("content", "")[
+                        :1500
+                    ],
+                },
+                ensure_ascii=False,
+            )
+        return json.dumps({"found": False, "message": "未找到相关笔记。"}, ensure_ascii=False)
+    except Exception as e:
         return json.dumps(
-            {
-                "found": True,
-                "title": result.get("title"),
-                "page_id": result.get("page_id"),
-                "score": result.get("distance", 0.0),
-                "domain": result.get("domain", "General"),
-                "existing_content": result.get("metadata", {}).get("content", "")[
-                    :1500
-                ],
-            },
+            {"found": False, "error": f"轻量检索失败: {str(e)}"},
             ensure_ascii=False,
         )
-    return json.dumps({"found": False, "message": "未找到相关笔记。"}, ensure_ascii=False)
 
 
 @tool

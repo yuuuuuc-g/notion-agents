@@ -59,20 +59,25 @@ Enterprise-Grade Personal Cognitive OS. 基于 FastAPI + LangGraph + Dependency 
 ### 后端 (Backend)
 
 -   **框架**: FastAPI, Uvicorn
--   **依赖注入**: Pydantic, ItsDangerous
+-   **依赖注入**: Pydantic, Pydantic-settings, ItsDangerous
 -   **数据库/缓存**: Redis (with hiredis), Qdrant (Vector Store), Notion (Knowledge Base)
 -   **AI/LLM**: Langchain, Langchain-community, Langchain-openai, Langgraph, OpenAI
+-   **向量嵌入**: FastEmbed (Sparse Vectors 支持)
 -   **安全性**: Cryptography, Python-magic, SlowAPI
 -   **文件处理**: PyPDF, PDFPlumber, BeautifulSoup4, EbookLib
--   **其他**: Python-multipart, Python-dotenv, Watchdog, Prometheus-client, Edge-tts, Pydub
+-   **语音合成**: Edge-TTS, Pydub
+-   **其他**: Python-multipart, Python-dotenv, Watchdog, Prometheus-client
 
 ### 前端 (Frontend)
 
--   **框架**: Next.js, React, React-DOM
--   **UI库/工具**: Tailwind CSS, clsx, lucide-react, tailwind-merge
+-   **框架**: Next.js 15.1, React 19, React-DOM
+-   **UI库/工具**: Tailwind CSS 3.4, clsx, lucide-react, tailwind-merge
 -   **Markdown处理**: react-markdown, rehype-sanitize, remark-gfm
+-   **代码高亮**: highlight.js, rehype-highlight
+-   **数学公式**: KaTeX, rehype-katex, remark-math
+-   **链接处理**: rehype-external-links
 -   **测试**: Vitest, @testing-library/jest-dom, @testing-library/react
--   **开发工具**: Autoprefixer, ESLint, TypeScript
+-   **开发工具**: TypeScript, ESLint, PostCSS, Autoprefixer
 
 ## 📂 目录结构 (Project Structure)
 
@@ -82,33 +87,53 @@ Enterprise-Grade Personal Cognitive OS. 基于 FastAPI + LangGraph + Dependency 
 │   ├── routes/             #      - chat, files, admin, system 模块化路由
 │   └── dependencies.py     #      - FastAPI 依赖注入辅助函数
 ├── core/                   # 🧠 后端核心层 (IoC Container)
-│   └── container.py        #      - 全局依赖注入容器与生命周期管理
+│   ├── container.py        #      - 全局依赖注入容器与生命周期管理
+│   └── config.py           #      - 应用配置管理
 ├── services/               # ⚙️ 后端业务层 (Business Logic)
 │   ├── chat_service.py     #      - 对话编排与 LLM 调用
 │   ├── file_parser.py      #      - 流式文件解析与安全校验
 │   ├── sync_service.py     #      - Notion 增量同步服务
 │   ├── audio_service.py    #      - TTS 语音合成服务
 │   └── archive_service.py  #      - 会话归档服务
+├── agent/                  # 🤖 LangGraph Agent 逻辑
+│   └── graph/              #      - 状态机工作流定义
+├── notion/                 # 📝 Notion 集成模块
+│   └── client.py           #      - Notion API 客户端封装
+├── vector/                 # 🔍 向量存储与检索
+│   ├── store.py            #      - Qdrant 向量存储管理
+│   └── embedding.py        #      - 嵌入模型封装 (Dense + Sparse)
+├── tools/                  # 🛠️ Agent 工具集
+│   └── search.py           #      - 知识检索工具
+├── utils/                  # 🧰 通用工具函数
+├── middleware/             # 🔧 FastAPI 中间件
+│   ├── auth.py             #      - 认证中间件
+│   └── rate_limit.py       #      - 限流中间件
 ├── infrastructure/         # 🏗️ 后端基础层 (数据库客户端, 缓存等)
 │   └── cache/              #      - Redis 客户端与缓存逻辑
+├── config/                 # ⚙️ 配置文件
+├── tests/                  # 🧪 测试套件
 ├── web/                    # 🌐 前端 Next.js 应用
-│   ├── app/                #      - Next.js 页面与组件
+│   ├── app/                #      - Next.js App Router 页面
+│   ├── components/         #      - React 组件
+│   ├── lib/                #      - 前端工具函数与 API 客户端
 │   ├── public/             #      - 静态资源
 │   ├── styles/             #      - 全局样式
-│   ├── components/         #      - React 组件
-│   ├── lib/                #      - 前端工具函数
 │   ├── package.json        #      - 前端依赖与脚本
 │   └── tsconfig.json       #      - 前端 TypeScript 配置
 ├── venv/                   # 🐍 Python 虚拟环境
-├── node_modules/           # 📦 Node.js 依赖
-├── package.json            # 📋 根目录 Node.js 依赖与项目脚本
+├── generated_audio/        # 🔊 TTS 生成的音频文件
+├── qdrant_storage/         # 💾 Qdrant 本地数据存储
+├── .env                    # 🔒 环境变量 (不提交到 Git)
+├── .env.example            # 📝 环境变量示例
 ├── requirements.txt        # 📝 Python 依赖
 ├── server.py               # 🚀 后端主应用入口
 ├── Dockerfile              # 🐳 后端 Dockerfile
 ├── Dockerfile.frontend     # 🐳 前端 Dockerfile
 ├── docker-compose.yml      # ⚙️ Docker Compose 配置
 ├── start.sh                # 🚀 启动脚本
-└── deploy.sh               # 部署脚本 (例如：CI/CD)
+├── deploy.sh               # 🚀 部署脚本
+├── CLAUDE.md               # 📝 AI 开发规范
+└── README.md               # 📖 项目说明
 ```
 
 ## 🚀 快速开始 (Getting Started)
@@ -193,17 +218,15 @@ npm run dev
 
 -   **运行后端**:
     ```bash
-    npm run dev:server
-    # 或者直接
-    # source venv/bin/activate
+    source venv/bin/activate
+    uvicorn api.main:app --reload
+    # 或者
     # python server.py
     ```
 -   **运行前端**:
     ```bash
-    npm run dev:web
-    # 或者进入 web 目录后
-    # cd web
-    # npm run dev
+    cd web
+    npm run dev
     ```
 
 ### 运行测试 (Running Tests)
@@ -232,6 +255,34 @@ npm run dev
     docker-compose up --build
     ```
 
+## 📝 开发规范 (Development Guidelines)
+
+本项目遵循严格的开发规范，确保代码质量和可维护性。
+
+### 命名与编码惯例
+
+**Python (后端)**:
+- 变量与函数使用 `snake_case`
+- 类名使用 `PascalCase`
+- 必须使用 Type Hints (类型提示)
+
+**TypeScript (前端)**:
+- 组件文件使用 `PascalCase.tsx`
+- 普通函数与变量使用 `camelCase`
+- 严禁使用 `any` 类型，必须定义具体的 `interface` 或 `type`
+
+### 核心原则
+
+1. **防御性编程**: 所有的 API 调用、数据库查询、文件读取必须包裹在 `try...except` 或 `try...catch` 中
+2. **逻辑简洁性**: 优先选择简单的逻辑实现，单个函数尽量控制在 50 行以内
+3. **中文文档化**: 复杂逻辑必须在代码上方添加中文注释，解释"为什么要这么做"
+4. **不破坏原则**: 禁止删除现有的功能性注释，禁止修改 `.env.example` 之外的 `.env` 本地配置文件
+
+### 验证与测试
+
+- 每次完成修改后，运行 `pytest` 或 `npm run test` 检查是否有语法错误
+- 修改 LangGraph 节点逻辑时，必须验证状态机的流转是否闭环
+
 ## 🧠 Memory Optimization (内存优化)
 
 BioBrain includes intelligent memory management for large AI models. The system can automatically load/unload models based on usage patterns and memory constraints.
@@ -258,8 +309,18 @@ Access the memory monitoring endpoint at `/api/memory` to view current memory us
 
 The system automatically unloads models idle for >5 minutes via a background scheduler.
 
+## 🔄 最近更新 (Recent Updates)
+
+### v4.0 重构 (2025-01)
+- ✨ 全新整洁架构设计，采用依赖注入模式
+- 🚀 升级 LangChain 到 v1.x，LangGraph 到 v1.x
+- 🔍 新增 Sparse Vectors 支持 (FastEmbed)
+- 📐 前端新增 KaTeX 数学公式渲染
+- 💻 前端新增代码高亮 (highlight.js)
+- 🔗 新增外部链接安全处理
+- 🧪 前后端测试框架完善
+
 ## 🤝 贡献 (Contributing)
 
 欢迎提交 Bug 报告、功能请求或 Pull Request。
-
 ---
