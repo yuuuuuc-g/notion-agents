@@ -1,326 +1,211 @@
-# 🌱 BioBrain (Reborn v4.0)
+# BioBrain
 
-Enterprise-Grade Personal Cognitive OS. 基于 FastAPI + LangGraph + Dependency Injection 的生产级、高可用 AI 后端系统。BioBrain 是一套数据主权自控的个人知识操作系统后端。经过 v4.0 深度重构，它从一个简单的脚本项目进化为采用 **整洁架构 (Clean Architecture)**、支持 **流式处理** 和 **全链路监控** 的工业级微服务。它实现了从“瞬时交互”到“长期记忆”的完整闭环。
+企业级个人知识后端：**FastAPI** 接入层、**LangGraph ReAct Agent** 编排、**Notion** 权威知识库与 **Qdrant** 向量记忆的一体化系统。仓库内同时包含 **Next.js 15** 前端（`web/`），与 Python 后端解耦部署。
 
-## 🌟 项目概览 (Project Overview)
+本文档面向**后端与新成员交接**：说明分层边界、`core/container.py` 的职责，以及模块间调用关系。
 
-本项目是一个全栈应用，结合了强大的 **Python FastAPI** 后端和现代化的 **Next.js React** 前端。后端系统 **BioBrain** 提供了一个企业级的个人认知操作系统，专注于数据主权自控和高效的 AI 逻辑编排。前端则提供直观的用户界面，与后端无缝交互。
+---
 
-## ✨ 主要特性 (Key Features)
+## 1. 系统分层总览
 
--   **企业级AI后端**: 基于 FastAPI 和 LangGraph，支持流式处理、高可用和全链路监控。
--   **整洁架构**: 严格遵循分层架构和依赖注入原则，实现模块化和高解耦。
--   **数据主权自控**: 个人知识操作系统后端，强调用户数据的自主管理。
--   **智能知识管理**: Notion 增量同步、Qdrant 语义向量存储。
--   **多模态处理**: 支持文件流式上传、PDF/EPUB 解析、TTS 语音合成。
--   **高性能**: 流式上传、并发控制、连接池优化。
--   **高安全性**: Redis SSL 加密、文件深度检测、路径遍历防护。
--   **前端现代化**: 基于 Next.js 框架，提供快速、响应式的用户体验。
--   **全面测试**: 前后端均包含测试，确保代码质量和稳定性。
+后端采用**分层 + 组合根（Composition Root）**：HTTP 与中间件只做接入；业务状态机与编排放在 `services/` 与 `agent/`；对外部系统（Notion、Qdrant、Redis、LLM）的访问集中在 `notion/`、`vector/`、`infrastructure/`，并由容器统一装配。
 
-## 🏗️ 核心架构设计 (Backend Architecture Blueprint)
+| 层级 | 主要职责 | 代表性路径 |
+|------|----------|------------|
+| **API 路由层** | HTTP 契约、鉴权挂载、`Depends` 解析 | `server.py`，`api/routes/*.py`，`api/dependencies.py` |
+| **中间件与横切** | 限流、带宽、指标、全局异常 | `middleware/` |
+| **业务服务层** | 用例编排：对话流、归档、同步、TTS、文件解析 | `services/` |
+| **Agent / 工具层** | LangGraph 图、LangChain `@tool`，运行时从容器取依赖 | `agent/`，`tools/` |
+| **Notion 交互层** | 页面/数据库 API、块构建 | `notion/` |
+| **向量检索层** | 层次化分块、稠密/稀疏向量、混合检索与（可选）重排序 | `vector/` |
+| **基础设施层** | 配置、Redis、日志、缓存降级 | `config/`，`infrastructure/`，`utils/` |
 
-系统严格遵循 **分层架构 (Layered Architecture)** 原则，通过 **依赖注入 (DI)** 实现模块解耦。
+---
 
-1.  **接入层 (API Layer)** - `api/` 模块化路由:
-    -   接口拆分为 chat, files, admin, system，职责单一。
-    -   统一网关: 集成 Rate Limiting (限流)、Bandwidth Control (带宽控制) 和 Global Error Handling (全局异常处理)。
-    -   安全鉴权: 基于 Bearer Token 的 verify_token 机制，配合 Pydantic 强校验。
+## 2. 调用关系（依赖方向）
 
-2.  **业务逻辑层 (Service Layer)** - `services/`
-    -   **ChatService**: 封装 LangGraph 状态机，管理 LLM 调用与流式响应。
-    -   **FileService**: 实现 流式上传 (Streaming Upload)，支持 Magic Number 校验、PDF 恶意代码扫描、EPUB 解析，杜绝 OOM (内存溢出) 风险。
-    -   **SyncService**: 实现 受控并发 (Semaphore) 的 Notion 增量同步，防止 API 限流。
-    -   **AudioService**: 统一封装 TTS 逻辑，支持长文本智能切分与 Markdown 清洗。
-    -   **ArchiveService**: 负责会话的异步归档与持久化。
+下图用 **Mermaid** 概括**静态依赖与典型运行期调用方向**（`-->` 表示上层对下层的调用或注入关系；与原文 ASCII 树层级一致：`server` → `api` → `services` / `agent` → `tools` → `notion` / `vector` / 基础设施）。
 
-3.  **核心容器层 (Core Layer)** - `core/`
-    -   **DI Container**: 纯 Python 实现的轻量级 IoC 容器，统一管理 Config, Redis, VectorStore 等单例的生命周期。
-    -   **Lifespan Management**: 统一管理应用启动时的连接预热与关闭时的资源释放。
+```mermaid
+graph TD
+  srv["server.py"]
+  srv --> mw["Middleware"]
+  srv --> rt["api/routes"]
+  srv --> life["Lifespan / schedulers"]
 
-4.  **基础设施层 (Infrastructure & Data)**
-    -   **🔥 Hot (Redis)**: [Session/Cache]
-        -   特性: 支持 SSL 加密、连接池复用。
-        -   容灾: 实现了 Fallback 降级策略，Redis 宕机时系统自动降级运行，不影响核心服务。
-    -   **🧊 Cold (Qdrant + Notion)**: [Long-term Memory]
-        -   **Qdrant**: 存储语义向量 (BGE-M3)，支持 Lazy Loading (懒加载) 和 Singleton (单例) 模式。
-        -   **Notion**: 知识的最终归档地，保持双写一致性。
+  rt --> dep["api/dependencies"]
+  dep --> ctr["container"]
 
-## 🛡️ 安全与性能特性 (Security & Performance)
+  rt --> svc["services"]
+  svc --> chat["ChatService 等"]
+  svc --> oth["Sync / Archive / TTS / Parser"]
 
-| 维度           | 特性说明                                                                                                                                                                                                                                                                                                                                                        |
-|:---------------|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **安全**       | **Redis SSL**: 强制加密传输，防止内网嗅探。<br> **File Hardening**: 深度检测 PDF 中的恶意 JavaScript，防止 XSS/RCE 攻击。<br> **Path Traversal**: 严格清洗文件名，防止 `../../` 路径遍历攻击。                                                                                                                                                                             |
-| **性能**       | **Streaming Upload**: GB 级大文件上传仅占用极低内存 (Chunked Processing)。<br> **Concurrency Control**: 使用 `asyncio.gather` + `Semaphore` 并发同步，效率提升 5x+。<br> **Connection Pooling**: Redis 与 Qdrant 连接池化，避免频繁握手开销。                                                                                                                                               |
-| **可观测性**   | **Prometheus Metrics**: 暴露 `/metrics` 接口，监控 QPS、延迟和错误率。                                                                                                                                                                                                                                                                                             |
+  chat --> agt["agent / LangGraph"]
+  agt --> tls["tools"]
+  tls --> ntn["notion"]
+  tls --> vec["vector"]
 
-## 🛠️ 技术栈 (Technologies Used)
+  oth --> ntn
+  oth --> vec
 
-### 后端 (Backend)
-
--   **框架**: FastAPI, Uvicorn
--   **依赖注入**: Pydantic, Pydantic-settings, ItsDangerous
--   **数据库/缓存**: Redis (with hiredis), Qdrant (Vector Store), Notion (Knowledge Base)
--   **AI/LLM**: Langchain, Langchain-community, Langchain-openai, Langgraph, OpenAI
--   **向量嵌入**: FastEmbed (Sparse Vectors 支持)
--   **安全性**: Cryptography, Python-magic, SlowAPI
--   **文件处理**: PyPDF, PDFPlumber, BeautifulSoup4, EbookLib
--   **语音合成**: Edge-TTS, Pydub
--   **其他**: Python-multipart, Python-dotenv, Watchdog, Prometheus-client
-
-### 前端 (Frontend)
-
--   **框架**: Next.js 15.1, React 19, React-DOM
--   **UI库/工具**: Tailwind CSS 3.4, clsx, lucide-react, tailwind-merge
--   **Markdown处理**: react-markdown, rehype-sanitize, remark-gfm
--   **代码高亮**: highlight.js, rehype-highlight
--   **数学公式**: KaTeX, rehype-katex, remark-math
--   **链接处理**: rehype-external-links
--   **测试**: Vitest, @testing-library/jest-dom, @testing-library/react
--   **开发工具**: TypeScript, ESLint, PostCSS, Autoprefixer
-
-## 📂 目录结构 (Project Structure)
-
-```plaintext
-.
-├── api/                    # 🚪 后端接口层 (Routes & Dependencies)
-│   ├── routes/             #      - chat, files, admin, system 模块化路由
-│   └── dependencies.py     #      - FastAPI 依赖注入辅助函数
-├── core/                   # 🧠 后端核心层 (IoC Container)
-│   ├── container.py        #      - 全局依赖注入容器与生命周期管理
-│   └── config.py           #      - 应用配置管理
-├── services/               # ⚙️ 后端业务层 (Business Logic)
-│   ├── chat_service.py     #      - 对话编排与 LLM 调用
-│   ├── file_parser.py      #      - 流式文件解析与安全校验
-│   ├── sync_service.py     #      - Notion 增量同步服务
-│   ├── audio_service.py    #      - TTS 语音合成服务
-│   └── archive_service.py  #      - 会话归档服务
-├── agent/                  # 🤖 LangGraph Agent 逻辑
-│   └── graph/              #      - 状态机工作流定义
-├── notion/                 # 📝 Notion 集成模块
-│   └── client.py           #      - Notion API 客户端封装
-├── vector/                 # 🔍 向量存储与检索
-│   ├── store.py            #      - Qdrant 向量存储管理
-│   └── embedding.py        #      - 嵌入模型封装 (Dense + Sparse)
-├── tools/                  # 🛠️ Agent 工具集
-│   └── search.py           #      - 知识检索工具
-├── utils/                  # 🧰 通用工具函数
-├── middleware/             # 🔧 FastAPI 中间件
-│   ├── auth.py             #      - 认证中间件
-│   └── rate_limit.py       #      - 限流中间件
-├── infrastructure/         # 🏗️ 后端基础层 (数据库客户端, 缓存等)
-│   └── cache/              #      - Redis 客户端与缓存逻辑
-├── config/                 # ⚙️ 配置文件
-├── tests/                  # 🧪 测试套件
-├── web/                    # 🌐 前端 Next.js 应用
-│   ├── app/                #      - Next.js App Router 页面
-│   ├── components/         #      - React 组件
-│   ├── lib/                #      - 前端工具函数与 API 客户端
-│   ├── public/             #      - 静态资源
-│   ├── styles/             #      - 全局样式
-│   ├── package.json        #      - 前端依赖与脚本
-│   └── tsconfig.json       #      - 前端 TypeScript 配置
-├── venv/                   # 🐍 Python 虚拟环境
-├── generated_audio/        # 🔊 TTS 生成的音频文件
-├── qdrant_storage/         # 💾 Qdrant 本地数据存储
-├── .env                    # 🔒 环境变量 (不提交到 Git)
-├── .env.example            # 📝 环境变量示例
-├── requirements.txt        # 📝 Python 依赖
-├── server.py               # 🚀 后端主应用入口
-├── Dockerfile              # 🐳 后端 Dockerfile
-├── Dockerfile.frontend     # 🐳 前端 Dockerfile
-├── docker-compose.yml      # ⚙️ Docker Compose 配置
-├── start.sh                # 🚀 启动脚本
-├── deploy.sh               # 🚀 部署脚本
-├── CLAUDE.md               # 📝 AI 开发规范
-└── README.md               # 📖 项目说明
+  ctr --> vec
+  ctr --> ntn
+  ctr --> redis["infrastructure / Redis"]
 ```
 
-## 🚀 快速开始 (Getting Started)
+**主链路（对话）**：`POST /chat` → `get_chat_service()` → `ChatService.stream_response` → `graph.astream_events` → LLM 按需调用 `tools_list` → 工具内部通过 **`container`** 访问向量库与 Notion。
 
-### 先决条件 (Prerequisites)
+**数据流（对话，具象）**：用户输入 → FastAPI 路由与鉴权 → `ChatService` 组装 query / 上传文件上下文 → LangGraph 状态机按步流转 → Tool 动态调用 → **Notion / Qdrant（经工具与容器）**读写或检索 → LLM 续写 → **SSE/流式**将 token 推回客户端。
 
--   Python 3.10+
--   Node.js 18+ (包含 npm)
--   Docker (可选，用于容器化部署)
--   Redis 实例 (本地或远程)
--   Qdrant 实例 (本地或远程)
--   Notion API Token (用于 Notion 同步功能)
--   OpenAI API Key (或其他 LLM 服务凭证)
+**主链路（知识入库）**：`SyncService` / `manage_notion_note` 等 → `NotionService` 与 `LevelChunkVectorStore.add_memory` 保持内容与索引对齐。
 
-### 1. 克隆仓库 (Clone the Repository)
+**数据流（知识入库，具象）**：Notion 页面或 Agent 写入请求 → **业务服务或工具**校验与编排 → **Notion API** 落库页面与块 → **向量层**分块与嵌入后写入 **Qdrant**（必要时更新 `doc_store` 同步标记）→ 后续检索与对话侧可见同一知识。
+
+---
+
+## 3. `core/container.py`：依赖注入容器如何统筹全局
+
+`Container` 是后端的**组合根**：不追求重型 IoC 框架，而是用**显式方法**构造依赖图，避免 `services` ↔ `agent` 之间的循环 import（部分工厂方法内 **延迟 import** `ChatService` 等）。
+
+全局单例：
+
+```python
+# core/container.py 末尾
+container = Container()
+```
+
+### 3.1 装配列表（与方法职责）
+
+| 方法 | 产物 | 说明 |
+|------|------|------|
+| `config()` | `SETTINGS` | Pydantic 配置单例 |
+| `redis_client()` | `RedisClient.get_instance()` | 缓存客户端 |
+| `cache_wrapper()` | `CacheWithFallback` | Redis 不可用时的降级策略 |
+| `vector_store()` | `LevelChunkVectorStore` | Qdrant 集合、嵌入、层次化分块 |
+| `hybrid_search_engine()` | `HybridSearchEngine` | 复用 `vector_store` 的 client 与 `embedding_provider`，并注入 `notion_service()` |
+| `notion_service()` | `NotionService` | Notion Token 与默认 DB |
+| `llm_factory(model=...)` | `ChatOpenAI` | 统一基 URL / Key / 流式与超时 |
+| `chat_service()` | `ChatService` | 注入 config、notion、llm_factory、cache |
+| `archive_service()` | `ArchiveService` | cache + vector + notion |
+| `audio_service()` | `AudioService` | TTS |
+| `sync_service()` | `SyncService` | notion + vector |
+
+### 3.2 与 FastAPI 的衔接
+
+`api/dependencies.py` **只依赖 `container`**，将上述方法包装为 `get_chat_service()`、`get_vector_store()` 等，供路由 `Depends` 使用。这样路由层不直接 `new` 业务类，**所有单例与装配顺序在 `Container` 内可见**。
+
+### 3.3 与 Agent / Tools 的衔接
+
+`agent/agent_graph.py` 与多数 `tools/*.py` **直接 import `container`**，在工具执行期按需调用 `container.vector_store()` 等。这与「请求级 Depends」并存：HTTP 路径走 `dependencies.py`；**图与工具在异步/线程边界内自行从容器解析**，注意避免在模块顶层引入尚未就绪的循环依赖（项目中已通过延迟 import 与函数内 import 处理）。
+
+### 3.4 GitNexus 依赖图谱（`IMPORTS core.container`）
+
+在已索引仓库上可通过 GitNexus 复现「谁依赖容器模块」：
 
 ```bash
-git clone https://github.com/your-username/notion-prism-react.git
-cd notion-prism-react
+npx gitnexus analyze          # 索引过期时先执行
+npx gitnexus cypher "MATCH (a:File)-[:CodeRelation {type:'IMPORTS'}]->(b:File) WHERE b.filePath CONTAINS 'core/container' RETURN a.filePath"
 ```
 
-### 2. 后端设置 (Backend Setup)
+当前图数据中**直接 import 容器模块**的文件包括：`server.py`、`api/dependencies.py`、`agent/agent_graph.py`、`agent/conversational_search_agent.py`、`tools/tools.py`、`tools/block_operation_tools.py`，以及调度路径上的 `services/sync_service.py`、`services/search_session_manager.py` 等（部分为函数内导入以降低环风险）。
 
-#### 创建 Python 虚拟环境并安装依赖
+---
+
+## 4. 技术栈（摘要）
+
+- **运行时**：Python 3.10+，FastAPI，Uvicorn（见启动方式）
+- **Agent**：LangGraph `create_react_agent`，LangChain tools
+- **记忆与检索**：Qdrant，FastEmbed / 稀疏向量（可选），可选 Cross-Encoder 重排序
+- **外部系统**：Notion API，Redis（hiredis）
+- **前端**：Next.js 15，React 19，Tailwind（详见 `web/package.json`）
+
+---
+
+## 5. 目录结构（后端相关节选）
+
+```text
+.
+├── server.py                 # FastAPI 应用入口（app 实例）
+├── api/
+│   ├── dependencies.py       # Depends → container
+│   └── routes/               # chat, files, admin, system
+├── core/
+│   └── container.py          # DI 容器与全局 container 单例
+├── config/
+│   └── settings.py           # SETTINGS
+├── services/                 # 业务服务
+├── agent/                    # LangGraph 与对话搜索子图
+├── tools/                    # LangChain 工具定义
+├── notion/                   # NotionService、块操作与 Markdown→块
+├── vector/                   # vector_store、hybrid_search、doc_store 等
+├── infrastructure/           # Redis 等
+├── middleware/
+├── utils/
+├── tests/
+└── web/                      # Next.js 前端
+```
+
+---
+
+## 6. 环境与启动
+
+### 6.1 先决条件
+
+- Python 3.10+
+- Node.js 18+（仅前端）
+- Redis、Qdrant、Notion 与 LLM 提供方凭证（见 `.env.example`）
+- **基础设施本地实例**：新人单独安装 Redis / Qdrant 往往最耗时；**推荐使用项目根目录的 `docker-compose.yml`，执行 `docker-compose up -d` 一键拉起 Redis 与 Qdrant 的本地实例**（再按 `.env.example` 将连接串指向容器端口）。
+
+### 6.2 后端
 
 ```bash
 python3 -m venv venv
-source venv/bin/activate  # macOS/Linux
-# venv\Scripts\activate   # Windows
+source venv/bin/activate
 pip install -r requirements.txt
+# 配置 .env（勿提交仓库；以 .env.example 为准）
+python server.py
+# 或：uvicorn server:app --host 0.0.0.0 --port 8000
 ```
 
-#### 配置环境变量
+亦可使用项目根目录 `./start.sh`（会检查 `.env` 并在前台启动 `server.py`）。
 
-创建 `.env` 文件 (基于 `.env.example`，如果存在的话) 并填写必要的配置，例如：
-
-```dotenv
-# .env
-OPENAI_API_KEY="your_openai_api_key"
-NOTION_API_KEY="your_notion_api_key"
-REDIS_URL="redis://localhost:6379"
-QDRANT_URL="http://localhost:6333"
-# ... 其他后端配置
-```
-
-### 3. 前端设置 (Frontend Setup)
-
-进入 `web` 目录并安装 Node.js 依赖:
+### 6.3 前端
 
 ```bash
-cd web
-npm install
-# 或者使用 yarn / pnpm / bun
+cd web && npm install && npm run dev
 ```
 
-#### 配置环境变量
+默认前后端地址以本地配置为准（例如 API `http://127.0.0.1:8000`，前端 `http://localhost:3000`）。
 
-前端也可能需要 `.env` 文件，例如 `web/.env.local`：
-
-```dotenv
-# web/.env.local
-NEXT_PUBLIC_API_URL="http://localhost:8000" # 指向后端API地址
-# ... 其他前端配置
-```
-
-### 4. 运行应用 (Running the Application)
-
-从项目根目录运行以下命令，同时启动后端和前端:
+### 6.4 测试
 
 ```bash
-npm run dev
+pytest
+cd web && npm run test
 ```
 
--   后端 API 将在 `http://localhost:8000` 运行 (默认)。
--   前端应用将在 `http://localhost:3000` 运行 (默认)。
-
-你可以在浏览器中打开 `http://localhost:3000` 访问应用。
-
-### 运行单独服务
-
-如果你只想运行后端或前端:
-
--   **运行后端**:
-    ```bash
-    source venv/bin/activate
-    uvicorn api.main:app --reload
-    # 或者
-    # python server.py
-    ```
--   **运行前端**:
-    ```bash
-    cd web
-    npm run dev
-    ```
-
-### 运行测试 (Running Tests)
-
--   **后端测试**:
-    ```bash
-    source venv/bin/activate
-    pytest
-    ```
--   **前端测试**:
-    ```bash
-    cd web
-    npm run test
-    # 或者
-    # npm run test:watch
-    # npm run test:coverage
-    # npm run test:ui
-    ```
-
-## ☁️ 部署 (Deployment)
-
-你可以使用 Docker Compose 进行容器化部署，或者参考 `deploy.sh` 脚本进行生产环境部署。
-
--   **使用 Docker 部署 (开发环境)**:
-    ```bash
-    docker-compose up --build
-    ```
-
-## 📝 开发规范 (Development Guidelines)
-
-本项目遵循严格的开发规范，确保代码质量和可维护性。
-
-### 命名与编码惯例
-
-**Python (后端)**:
-- 变量与函数使用 `snake_case`
-- 类名使用 `PascalCase`
-- 必须使用 Type Hints (类型提示)
-
-**TypeScript (前端)**:
-- 组件文件使用 `PascalCase.tsx`
-- 普通函数与变量使用 `camelCase`
-- 严禁使用 `any` 类型，必须定义具体的 `interface` 或 `type`
-
-### 核心原则
-
-1. **防御性编程**: 所有的 API 调用、数据库查询、文件读取必须包裹在 `try...except` 或 `try...catch` 中
-2. **逻辑简洁性**: 优先选择简单的逻辑实现，单个函数尽量控制在 50 行以内
-3. **中文文档化**: 复杂逻辑必须在代码上方添加中文注释，解释"为什么要这么做"
-4. **不破坏原则**: 禁止删除现有的功能性注释，禁止修改 `.env.example` 之外的 `.env` 本地配置文件
-
-### 验证与测试
-
-- 每次完成修改后，运行 `pytest` 或 `npm run test` 检查是否有语法错误
-- 修改 LangGraph 节点逻辑时，必须验证状态机的流转是否闭环
-
-## 🧠 Memory Optimization (内存优化)
-
-BioBrain includes intelligent memory management for large AI models. The system can automatically load/unload models based on usage patterns and memory constraints.
-
-### Configuration Options
-
-Add these environment variables to your `.env` file:
-
-- `ENABLE_SPARSE_MODEL=true` - Enable/disable sparse embedding model (Splade)
-- `ENABLE_RERANKER=true` - Enable/disable cross-encoder reranker model
-- `MAX_MEMORY_MB=2048` - Maximum memory limit (MB) for model loading decisions
-- `SPARSE_MODEL_NAME=prithivida/Splade_PP_en_v1` - Sparse model name
-- `RERANKER_MODEL_NAME=BAAI/bge-reranker-large` - Reranker model name
-
-### Production Recommendations
-
-1. **Memory-constrained environments**: Set `ENABLE_SPARSE_MODEL=false` and `ENABLE_RERANKER=false` to disable optional models (~1GB memory saving).
-2. **Balanced deployment**: Keep sparse model enabled, disable reranker if memory < 4GB.
-3. **High-memory servers**: Increase `MAX_MEMORY_MB` to 4096 or higher for better performance.
-
-### Monitoring
-
-Access the memory monitoring endpoint at `/api/memory` to view current memory usage and model status. Use `/api/memory/cleanup` (POST) to manually trigger cleanup of idle models.
-
-The system automatically unloads models idle for >5 minutes via a background scheduler.
-
-## 🔄 最近更新 (Recent Updates)
-
-### v4.0 重构 (2025-01)
-- ✨ 全新整洁架构设计，采用依赖注入模式
-- 🚀 升级 LangChain 到 v1.x，LangGraph 到 v1.x
-- 🔍 新增 Sparse Vectors 支持 (FastEmbed)
-- 📐 前端新增 KaTeX 数学公式渲染
-- 💻 前端新增代码高亮 (highlight.js)
-- 🔗 新增外部链接安全处理
-- 🧪 前后端测试框架完善
-
-## 🤝 贡献 (Contributing)
-
-欢迎提交 Bug 报告、功能请求或 Pull Request。
 ---
+
+## 7. 可观测性与向量内存
+
+- **Prometheus**：中间件暴露 `/metrics`（见 `server.py` 与 `middleware/metrics.py`）。
+- **模型懒加载与卸载**：服务端后台调度会调用 `vector_store` / `hybrid_search_engine` 上的空闲卸载逻辑；详见环境变量说明（如 `ENABLE_SPARSE_MODEL`、`ENABLE_RERANKER`、`MAX_MEMORY_MB`）。进程级内存观测与手动清理见 `server.py` 中注册的 **`GET /api/memory`**、**`POST /api/memory/cleanup`**（与健康检查 `api/routes/system.py` 的 `/health` 并列）。
+
+---
+
+## 8. 开发规范
+
+详细约定（命名、异常策略、与前端 Hook 同步等）见仓库根目录 **`CLAUDE.md`**。修改 LangGraph 节点或 API 契约时，请同步验收流式行为与工具返回 JSON 格式，避免 Agent 侧无法解析。
+
+---
+
+## 9. 文档与图谱维护
+
+- 架构检索与影响分析：**GitNexus**（`npx gitnexus status | analyze | query | context | impact | cypher`）。
+- 提交较大重构后建议重新 `npx gitnexus analyze`；若索引含嵌入，需按 `.gitnexus` 文档保留 `--embeddings` 参数，避免误删嵌入索引。
+
+---
+
+## 10. 贡献
+
+欢迎 Issue 与 Pull Request；新增模块时优先通过 **`Container` 新增工厂方法** 或 **`api/dependencies.py` 暴露 Depends**，保持接入层与基础设施边界清晰。

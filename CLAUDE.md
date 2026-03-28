@@ -16,28 +16,34 @@
    - 严禁使用 `any` 类型，必须定义具体的 `interface` 或 `type`。
 
 ## 核心优化原则 (必须遵守)
-1. **防御性编程**: 所有的 API 调用、数据库查询、文件读取必须包裹在 `try...except` 或 `try...catch` 中。
-2. **逻辑简洁性**:
+1. **防御性编程与异常处理**:
+   - 对外部不稳定调用（如网络请求、第三方 API）必须使用 `try...except` / `try...catch` 并妥善处理降级。
+   - 对于系统级或无法局部处理的异常，允许向上抛出（`raise` / `throw`），交由 FastAPI 等全局异常中间件统一处理。严禁使用空的 `except Exception:` 吞没错误。
+2. **状态不可变原则 (LangGraph 铁律)**:
+   - 在 LangGraph 节点函数中，严禁直接原地修改传入的 `state` 对象（例如禁止 `state["messages"].append()`）。必须将需要更新的字段作为新的字典返回（例如 `return {"messages": [new_msg]}`），交由框架完成状态合并。
+3. **逻辑简洁性与文件拆分**:
    - 优先选择简单的逻辑实现，禁止引入复杂的模式（如过度解耦、抽象工厂等）。
-   - 单个函数尽量控制在 50 行以内，超过则考虑拆分。
-3. **中文文档化**:
+   - 普通业务函数尽量控制在 50 行以内。但对于高度聚合的 LangGraph 节点（如包含大段 Prompt 组装）和包含完整 JSX 结构的 React 组件允许适当放宽，禁止为了满足行数限制而进行毫无意义的碎片化拆分。
+4. **中文文档化**:
    - 每一处逻辑修改必须在代码上方添加中文注释，解释“为什么要这么做”而非“这段代码做了什么”。
    - 复杂的 LangGraph 节点必须在注释中注明“输入状态”和“预期输出状态”。
-4. **不破坏原则**:
+5. **不破坏原则**:
    - 禁止删除现有的功能性注释（如包含特殊业务逻辑说明的注释）。
    - 禁止修改 `.env.example` 之外的 `.env` 本地环境配置文件。
    - 修改 API 接口时，必须检查前端对应的 Hook 是否需要同步更新。
 
 ## 验证与测试
-1. **自我检查**: 每次完成修改后，AI 必须尝试运行 `pytest` 或 `npm run dev` 检查是否有语法错误。
-2. **流程跑通**: 如果修改了 LangGraph 的节点逻辑，必须验证状态机（State）的流转是否依然闭环。
+1. **自我检查**:
+   - 每次完成后端修改后，AI 必须尝试运行 `pytest`（如有）或确保终端无语法报错。
+   - 每次完成前端修改后，AI 必须运行 `npx tsc --noEmit` 或 `npm run build` 来严格检查 TypeScript 类型与语法错误（仅运行 `npm run dev` 是不够的）。
+2. **流程跑通**: 如果修改了 LangGraph 的节点逻辑，必须验证状态机（State）的流转是否依然闭环，避免死循环或断链。
 
 ## 常用命令
 - 启动后端: `uvicorn api.main:app --reload`
 - 启动前端: `cd web && npm run dev`
+- 前端类型检查: `cd web && npx tsc --noEmit`
 - 依赖安装: `pip install -r requirements.txt` 或 `npm install`
 
-<!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
 This project is indexed by GitNexus as **notion-prism-react** (1072 symbols, 2537 relationships, 70 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
