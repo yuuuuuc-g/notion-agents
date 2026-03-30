@@ -11,11 +11,17 @@ export interface Message {
     matched_snippet: string;
     score: number;
   };
+  notionDraft?: {
+    draft_id: string;
+    title: string;
+    summary: string;
+    category: string;
+  };
 }
 
 // --- 常量配置 ---
 // API_URL 仅用于拼接音频链接等静态资源，API 请求统一走相对路径
-const API_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+const API_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000';
 const API_SECRET = process.env.NEXT_PUBLIC_API_SECRET;
 const MODEL_NAME = "deepseek-ai/DeepSeek-V3";
 
@@ -69,6 +75,7 @@ export function useBioBrain(initialFileId?: string) {
       let aiResponse = "";
       let parsedAudioUrl: string | undefined;
       let parsedMetadata: any = null;
+      let parsedNotionDraft: any = null;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -98,15 +105,35 @@ export function useBioBrain(initialFileId?: string) {
           }
         }
 
+        // 解析 Notion 草稿（HITL 人工确认）
+        if (!parsedNotionDraft) {
+          const draftMatch = aiResponse.match(/\[NOTION_PENDING_APPROVAL:\s*({[\s\S]*?})\]/i);
+          if (draftMatch) {
+            console.log("🔍 [Debug] 找到 NOTION_PENDING_APPROVAL 标记");
+            console.log("🔍 [Debug] 提取的 JSON:", draftMatch[1]);
+            try {
+              parsedNotionDraft = JSON.parse(draftMatch[1]);
+              console.log("✅ [Debug] JSON 解析成功:", parsedNotionDraft);
+            } catch (e) {
+              console.warn("⚠️ [Debug] JSON 解析失败，等待数据完整:", e);
+              // 等待数据完整
+            }
+          }
+        }
+
         // 实时更新 UI
         setMessages((prev) => {
           const newMessages = [...prev];
           const lastMsg = newMessages[newMessages.length - 1];
           if (lastMsg.role === "assistant") {
-            // 清洗内容
+            // 清洗内容（移除所有特殊标记和给 Agent 看的指令）
             let cleanContent = aiResponse
               .replace(/\[KNOWLEDGE_META:[\s\S]*?\]/g, "")
               .replace(/\[AUDIO_URL:.*?\]/g, "")
+              .replace(/\[NOTION_PENDING_APPROVAL:[\s\S]*?\]/g, "")
+              .replace(/✅\s*TOOL EXECUTION SUCCESSFUL[\s\S]*?(?=\n\n我已经准备好|$)/gi, "")
+              .replace(/🛑\s*CRITICAL INSTRUCTION FOR AGENT:[\s\S]*?(?=\n\n我已经准备好|$)/gi, "")
+              .replace(/REQUIRED RESPONSE FORMAT:[\s\S]*?(?=\n\n我已经准备好|$)/gi, "")
               .replace(/✅\s*(Audio generated|音频已生成).*?Path:.*?mp3/gi, "")
               .replace(/✅\s*(Audio generated|音频已生成).*?(\n|$)/gi, "")
               .trim();
@@ -114,6 +141,10 @@ export function useBioBrain(initialFileId?: string) {
             lastMsg.content = cleanContent;
             if (parsedAudioUrl) lastMsg.audioUrl = parsedAudioUrl;
             if (parsedMetadata) lastMsg.knowledgeContext = parsedMetadata;
+            if (parsedNotionDraft) {
+              lastMsg.notionDraft = parsedNotionDraft;
+              console.log("✅ [Debug] notionDraft 已附加到消息:", lastMsg.notionDraft);
+            }
           }
           return newMessages;
         });
@@ -144,7 +175,7 @@ export function useBioBrain(initialFileId?: string) {
 
     try {
       // 🔥 修复 2: 使用相对路径 /api/upload
-      // 原代码使用的是 ${API_URL}/upload，这会导致直接连 localhost:8000 从而 404
+      // 原代码使用的是 ${API_URL}/upload，这会导致直接连 127.0.0.1:8000 从而 404
       // 这里的 /api/upload 会被 Next.js 代理转发到后端的 /api/upload
       const res = await fetch(`/api/upload`, {
         method: "POST",

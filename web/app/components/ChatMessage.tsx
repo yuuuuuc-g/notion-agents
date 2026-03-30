@@ -11,6 +11,7 @@ import { Bot, User, Volume2 } from "lucide-react";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import NotionCard from "./NotionCard";
+import NotionApprovalCard from "./NotionApprovalCard";
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -23,11 +24,19 @@ interface KnowledgeContext {
   score: number;
 }
 
+interface NotionDraft {
+  draft_id: string;
+  title: string;
+  summary: string;
+  category: string;
+}
+
 interface Message {
   role: "user" | "assistant";
   content: string;
   audioUrl?: string;
   knowledgeContext?: KnowledgeContext;
+  notionDraft?: NotionDraft;
 }
 
 interface ChatMessageProps {
@@ -35,6 +44,11 @@ interface ChatMessageProps {
 }
 
 export default function ChatMessage({ message }: ChatMessageProps) {
+  // 调试日志
+  if (message.role === "assistant" && message.notionDraft) {
+    console.log("🎨 [Debug] ChatMessage 收到 notionDraft:", message.notionDraft);
+  }
+
   return (
     <div className={cn(
       "flex w-full animate-in fade-in slide-in-from-bottom-4 duration-500",
@@ -92,6 +106,11 @@ export default function ChatMessage({ message }: ChatMessageProps) {
         {/* Knowledge Card */}
         {message.role === "assistant" && message.knowledgeContext && (
           <NotionCard context={message.knowledgeContext} />
+        )}
+
+        {/* Notion Approval Card (HITL) */}
+        {message.role === "assistant" && message.notionDraft && (
+          <NotionApprovalCard draft={message.notionDraft} />
         )}
 
         {/* Audio Player */}

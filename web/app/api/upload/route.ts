@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// 1. 后端地址配置
-const BACKEND_HOST = process.env.API_BASE_URL || 'http://biobrain_backend:8000';
-const API_SECRET = process.env.API_SECRET;
-
-if (!API_SECRET) {
-  console.error('API_SECRET environment variable is not set in Next.js');
-}
+// 1. 后端地址配置（与 chat/route 一致：本地默认 IPv4；Docker 通过 API_BASE_URL 覆盖）
+const BACKEND_HOST = process.env.API_BASE_URL || 'http://127.0.0.1:8000';
 
 export async function POST(req: NextRequest) {
   try {
@@ -34,10 +29,28 @@ export async function POST(req: NextRequest) {
     const backendUrl = `${BACKEND_HOST}/api/upload`;
     console.log(`🔌 [UploadProxy] Forwarding ${files.length} files to: ${backendUrl}`);
 
+    const incomingAuth = req.headers.get('authorization');
+    const proxyAuth =
+      incomingAuth && incomingAuth.startsWith('Bearer ')
+        ? incomingAuth
+        : process.env.API_SECRET
+          ? `Bearer ${process.env.API_SECRET}`
+          : undefined;
+
+    if (!proxyAuth) {
+      return NextResponse.json(
+        {
+          error:
+            'Missing API authentication: set API_SECRET in web/.env.local or send Authorization: Bearer from the client',
+        },
+        { status: 401 }
+      );
+    }
+
     const response = await fetch(backendUrl, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${API_SECRET}`,
+        Authorization: proxyAuth,
       },
       body: backendFormData,
     });

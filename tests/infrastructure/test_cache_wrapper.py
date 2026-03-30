@@ -8,6 +8,7 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
+import redis
 
 from utils.cache_fallback import CacheWithFallback
 
@@ -59,19 +60,29 @@ class TestCacheWithFallback:
         mock_redis.setex.assert_called_with("key", 60, "value")
 
     def test_setex_fallback(self, cache, mock_redis):
-        mock_redis.setex.side_effect = Exception("Error")
+        mock_redis.setex.side_effect = redis.ConnectionError("Error")
         result = cache.setex("key", 60, "val")
-        assert result is False
+        assert result is True
         assert cache.is_available is False
+        assert cache.get("key") == "val"
 
     def test_exists_success(self, cache, mock_redis):
         mock_redis.exists.return_value = 1
         assert cache.exists("key") == 1
 
     def test_exists_fallback(self, cache, mock_redis):
-        mock_redis.exists.side_effect = Exception("Error")
-        assert cache.exists("key") is False
+        mock_redis.exists.side_effect = redis.ConnectionError("Error")
+        assert cache.exists("key") == 0
         assert cache.is_available is False
+
+    def test_init_without_redis_memory_backend(self):
+        cache = CacheWithFallback(None)
+        assert cache.is_available is False
+        assert cache.setex("k", 3600, "hello") is True
+        assert cache.get("k") == "hello"
+        assert cache.exists("k") == 1
+        cache.delete("k")
+        assert cache.get("k") is None
 
     # === 异步健康检查测试 (核心优化) ===
 

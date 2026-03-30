@@ -262,3 +262,13 @@ def client(test_client):
 @pytest.fixture
 def auth_headers(mock_settings) -> dict:
     return {"Authorization": f"Bearer {mock_settings.API_SECRET}"}
+
+
+@pytest.fixture(autouse=True)
+def _reset_cache_wrapper_singleton():
+    """避免 core.container 全局 CacheWithFallback 单例在测试之间泄漏。"""
+    import core.container as cc
+
+    cc._cache_wrapper_singleton = None
+    yield
+    cc._cache_wrapper_singleton = None

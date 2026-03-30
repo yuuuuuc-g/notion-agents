@@ -4,6 +4,9 @@ core/container.py
 重构版本 v4.1.0 - 适配 Merged VectorStore (v5)
 """
 
+import logging
+
+import redis
 from langchain_openai import ChatOpenAI
 
 from config.settings import SETTINGS
@@ -18,6 +21,11 @@ from vector.vector_store import LevelChunkVectorStore
 # from services.archive_service import ArchiveService
 # from services.audio_service import AudioService
 # from services.sync_service import SyncService
+
+logger = logging.getLogger(__name__)
+
+# 中文说明：缓存包装器进程内单例，使无 Redis 时的内存后端在多次 HTTP 请求间仍可命中（与 Depends 每请求拆箱仍得到同一实例）
+_cache_wrapper_singleton = None
 
 
 class Container:
@@ -35,7 +43,19 @@ class Container:
 
     # 3. 缓存降级包装器
     def cache_wrapper(self):
-        return CacheWithFallback(self.redis_client())
+        global _cache_wrapper_singleton
+        if _cache_wrapper_singleton is None:
+            try:
+                _cache_wrapper_singleton = CacheWithFallback(self.redis_client())
+            except redis.RedisError as e:
+                # 中文说明：首轮连接失败时不得冒泡至 FastAPI Depends，否则 /api/chat 等路由直接 500
+                logger.error(
+                    "Redis 不可用，使用纯内存 CacheWithFallback（进程内单例）: %s",
+                    e,
+                    exc_info=True,
+                )
+                _cache_wrapper_singleton = CacheWithFallback(None)
+        return _cache_wrapper_singleton
 
     # 4. 向量存储服务 (Updated to use v5 Merged Store)
     def vector_store(self) -> LevelChunkVectorStore:

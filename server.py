@@ -1,11 +1,12 @@
 """
 Biobrain Server Entry Point
-版本：v4.8 (Code Review Fixed)
+版本：v4.9 (Code Review Fixed & Auto-Sync Enabled)
 修复：
   - 删除 reload=False 时无效的 reload_excludes（死代码）
   - CORS: allow_credentials 改为 False（单机项目不需要）
   - lifespan 预创建 AUDIO_DIR，防止 StaticFiles 启动崩溃
   - 删除端点函数内多余的 `from core.container import container`
+  - 恢复后台自动同步调度器 (auto_sync_scheduler)
 """
 
 import asyncio
@@ -25,6 +26,9 @@ from core.container import container
 from middleware.bandwidth_limiter import BandwidthLimiterMiddleware
 from middleware.error_handler import register_exception_handlers
 from middleware.metrics import PrometheusMiddleware, metrics_endpoint
+
+# 🔥 引入后台自动同步调度器
+from services.sync_service import auto_sync_scheduler
 from utils.logger import setup_logging
 
 # 🔥 全局 SlowAPI Limiter 实例（供路由使用）
@@ -35,6 +39,7 @@ try:
     from api.routes.admin import router as admin_router
     from api.routes.chat import router as chat_router
     from api.routes.files import router as files_router
+    from api.routes.notion import router as notion_router
     from api.routes.system import router as system_router
 except ImportError as e:
     import sys
@@ -97,19 +102,29 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"❌ Vector Store connection failed: {e}")
 
-    # 启动自动清理调度器
+    # 1. 启动自动清理调度器
     cleanup_task = asyncio.create_task(auto_cleanup_scheduler())
     logger.info("🔄 Auto cleanup scheduler started (interval: 300s)")
+
+    # 2. 启动 Notion 自动同步调度器
+    notion_db_id = "2c535e6b0ea580ce8170d8c0bebff29a"
+    sync_task = asyncio.create_task(auto_sync_scheduler(db_id=notion_db_id))
+    logger.info(f"🔄 Notion auto-sync scheduler started for DB: {notion_db_id}")
 
     yield
 
     # ── Shutdown ──
     logger.info("🛑 Biobrain Server shutting down...")
+
+    # 优雅地取消所有后台任务
     cleanup_task.cancel()
+    sync_task.cancel()
+
     try:
-        await cleanup_task
+        await asyncio.gather(cleanup_task, sync_task, return_exceptions=True)
     except asyncio.CancelledError:
         pass
+    logger.info("✅ All background tasks gracefully shut down.")
 
 
 # ==========================================
@@ -117,7 +132,7 @@ async def lifespan(app: FastAPI):
 # ==========================================
 app = FastAPI(
     title="Biobrain API",
-    version="4.8.0",
+    version="4.9.0",
     description="AI Second Brain with Notion & Qdrant Integration",
     lifespan=lifespan,
 )
@@ -142,6 +157,7 @@ register_exception_handlers(app)
 # 路由注册
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
+app.include_router(notion_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(admin_router, prefix="/api/admin")
 
@@ -186,7 +202,7 @@ async def get_memory_usage():
         system_memory = psutil.virtual_memory()
 
         # 模型状态
-        vector_store = container.vector_store()  # 🔥 删除多余的 import
+        vector_store = container.vector_store()
 
         sparse_model_stats = {}
         reranker_stats = {}
@@ -245,7 +261,7 @@ async def get_memory_usage():
 async def cleanup_idle_models():
     """手动触发卸载闲置模型"""
     try:
-        vector_store = container.vector_store()  # 🔥 删除多余的 import
+        vector_store = container.vector_store()
         unloaded_count = 0
 
         if hasattr(vector_store, "auto_unload_idle_models"):
@@ -282,5 +298,4 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=8000,
         reload=False,
-        # 🔥 删除了 reload_excludes（reload=False 时无效的死代码）
     )

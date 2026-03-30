@@ -253,9 +253,55 @@ async def manage_notion_note(
             # 查重失败不阻止创建，但记录日志
 
     # =============================
-    # 4. 执行 Notion 操作
+    # 3.5 🔥 HITL 人工确认机制（仅针对 create 操作）
     # =============================
-    target_db_id = db_ids.get(category, db_ids.get("General"))
+    if action == "create":
+        print("🛡️ [Tool] 启用 HITL 人工确认机制，缓存草稿...")
+
+        # 生成唯一的草稿 ID
+        import uuid
+
+        draft_id = f"notion_draft_{uuid.uuid4().hex[:12]}"
+
+        # 获取缓存实例（使用现有的 CacheWithFallback）
+        cache = container.cache_wrapper()
+
+        # 构建草稿数据
+        draft_data = {
+            "title": title,
+            "content_markdown": content_markdown,
+            "summary": summary,
+            "category": category,
+            "target_db_id": db_ids.get(category, db_ids.get("General")),
+        }
+
+        # 缓存草稿（TTL 1小时 = 3600秒）
+        # 注意：CacheWithFallback 使用 setex(key, ttl, value) 接口
+        cache.setex(draft_id, 3600, json.dumps(draft_data, ensure_ascii=False))
+        print(f"✅ [Tool] 草稿已缓存: {draft_id} (TTL: 3600s)")
+
+        # 🔥 返回强制性指令 + 特殊标记（打断 Agent 思考链，防止死循环）
+        # 关键：必须用自然语言明确告诉 LLM "任务已完成，停止执行工具"
+        # 注意：必须要求 LLM 原样输出标记，不要修改或重新格式化
+        return (
+            f"✅ TOOL EXECUTION SUCCESSFUL\n\n"
+            f"🛑 CRITICAL INSTRUCTION FOR AGENT:\n"
+            f"1. The Notion draft has been created and cached successfully.\n"
+            f"2. You MUST include the following EXACT tag in your response to the user (DO NOT modify it):\n"
+            f'   [NOTION_PENDING_APPROVAL:{{"draft_id":"{draft_id}","title":"{title}","summary":"{summary}","category":"{category}"}}]\n\n'
+            f"3. Your task is COMPLETE. STOP executing any further tools.\n"
+            f"4. DO NOT retry. DO NOT call manage_notion_note again with force_create=True.\n\n"
+            f"REQUIRED RESPONSE FORMAT:\n"
+            f"You must respond to the user in Chinese with this structure:\n"
+            f"- First line: Include the tag [NOTION_PENDING_APPROVAL:...] EXACTLY as shown above\n"
+            f"- Then say: \"我已经准备好了笔记草稿，请在下方的审批卡片中点击'批准写入'按钮来保存到 Notion，或点击'拒绝'来取消。\"\n"
+            f"- Add draft details: 标题: {title}, 分类: {category}, 摘要: {summary}\n"
+        )
+
+    # =============================
+    # 4. 执行 Notion 操作（仅 overwrite 会到达这里）
+    # =============================
+    # target_db_id = db_ids.get(category, db_ids.get("General"))
     current_page_id = None
     is_new_page = False
 
@@ -284,36 +330,11 @@ async def manage_notion_note(
                     ensure_ascii=False,
                 )
 
-        else:
-            # 创建新页面
-            print("📄 [Tool] 创建新页面...")
-
-            # 🔥 把 summary 作为引用块添加到内容开头
-            content_with_summary = f"""
-> 📝 **摘要**: {summary}
-
----
-
-{content_markdown}
-"""
-
-            blocks = markdown_to_blocks(content_with_summary)
-            response = await asyncio.to_thread(
-                notion_service.create_page,
-                title=title,
-                children=blocks,
-                db_id=target_db_id,
-                category=category,  # 🔥 设置 Type
-                tags=[category, "AI生成"] if category else ["AI生成"],  # 🔥 设置 Tags
-            )
-            current_page_id = response.get("id")
-
-            if current_page_id:
-                is_new_page = True
-                print(f"✅ [Tool] Notion 页面已创建: {current_page_id}")
+        # 注意：action == "create" 已在上面返回（HITL 机制），不会到达这里
+        # 只有 action == "overwrite" 会继续执行向量库同步
 
         # =============================
-        # 5. 向量库同步 + 事务保证
+        # 5. 向量库同步 + 事务保证（仅 overwrite）
         # =============================
         if current_page_id:
             print("💾 [Tool] 正在同步到向量库...")
