@@ -55,7 +55,7 @@ logger = logging.getLogger("biobrain.server")
 # ==========================================
 # 自动清理调度器
 # ==========================================
-async def auto_cleanup_scheduler(interval_seconds: int = 300):
+async def auto_cleanup_scheduler(interval_seconds: int = 120):
     """定期检查并卸载闲置模型以释放内存"""
     logger.info(f"🔄 Starting auto cleanup scheduler (interval: {interval_seconds}s)")
 
@@ -65,13 +65,13 @@ async def auto_cleanup_scheduler(interval_seconds: int = 300):
             unloaded_count = 0
 
             if hasattr(vector_store, "auto_unload_idle_models"):
-                if vector_store.auto_unload_idle_models():
+                if await asyncio.to_thread(vector_store.auto_unload_idle_models):
                     unloaded_count += 1
 
             try:
                 hybrid_engine = container.hybrid_search_engine()
                 if hasattr(hybrid_engine, "auto_unload_idle_models"):
-                    if hybrid_engine.auto_unload_idle_models():
+                    if await asyncio.to_thread(hybrid_engine.auto_unload_idle_models):
                         unloaded_count += 1
             except Exception as e:
                 logger.warning(f"Failed to unload reranker model: {e}")
@@ -224,7 +224,7 @@ async def get_memory_usage():
         config_info = {
             "ENABLE_SPARSE_MODEL": getattr(SETTINGS, "ENABLE_SPARSE_MODEL", True),
             "ENABLE_RERANKER": getattr(SETTINGS, "ENABLE_RERANKER", True),
-            "MAX_MEMORY_MB": getattr(SETTINGS, "MAX_MEMORY_MB", 2048),
+            "MAX_MEMORY_MB": getattr(SETTINGS, "MAX_MEMORY_MB", 1500),
             "SPARSE_MODEL_NAME": getattr(SETTINGS, "SPARSE_MODEL_NAME", "unknown"),
             "RERANKER_MODEL_NAME": getattr(SETTINGS, "RERANKER_MODEL_NAME", "unknown"),
         }
