@@ -58,27 +58,36 @@ async def get_graph_data(q: Optional[str] = Query(None)):
         links = []
         
         # 处理每篇笔记
-        for result in search_results["results"]:
-            note_id = result.get("page_id", str(uuid.uuid4()))
-            title = result.get("title", "Untitled")
-            # Try multiple possible content fields from different vector store implementations
-            # Debug log the result structure
-            logger.debug(f"Search result structure: {result.keys()}")
+        seen_titles = {}  # 用于合并相同标题的笔记内容
+        
+        for hit in search_results["results"]:
+            logger.debug(f"DEBUG PAYLOAD: {hit.payload}")
             
-            # Get content from the most likely fields
-            content = ""
-            if "page_content" in result:
-                content = result["page_content"]
-            elif "content" in result:
-                content = result["content"]
-            elif "text" in result:
-                content = result["text"]
-            elif "payload" in result and isinstance(result["payload"], dict):
-                # Try nested payload fields
-                payload = result["payload"]
-                content = payload.get("page_content", payload.get("content", payload.get("text", "")))
+            # 提取标题
+            payload = hit.payload or {}
+            metadata = payload.get("metadata", {})
+            title = (
+                metadata.get("title") or 
+                metadata.get("source") or 
+                payload.get("title") or 
+                "Untitled"
+            )
             
-            logger.debug(f"Extracted content length: {len(content)}")
+            # 提取正文内容
+            content = payload.get("page_content", "")
+            
+            # 如果已经存在同名节点，则合并内容
+            if title in seen_titles:
+                existing_node = seen_titles[title]
+                existing_node.content += f"\n\n...\n\n{content}"
+                continue
+                
+            # 创建新节点
+            note_id = str(uuid.uuid4())
+            seen_titles[title] = {
+                "id": note_id,
+                "content": content
+            }
             
             # 根据分类确定节点颜色
             category = result.get("metadata", {}).get("category", "").lower()
