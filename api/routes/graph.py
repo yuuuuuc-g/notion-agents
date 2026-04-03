@@ -60,7 +60,13 @@ async def get_graph_data(q: Optional[str] = Query(None)):
         for result in search_results["results"]:
             note_id = result.get("page_id", str(uuid.uuid4()))
             title = result.get("title", "Untitled")
-            content = result.get("content", "")
+            # Try multiple possible content fields from different vector store implementations
+            content = (
+                result.get("page_content") 
+                or result.get("content") 
+                or result.get("text") 
+                or ""
+            )
             
             # 根据分类确定节点颜色
             category = result.get("metadata", {}).get("category", "").lower()
