@@ -107,10 +107,11 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(auto_cleanup_scheduler())
     logger.info("🔄 Auto cleanup scheduler started (interval: 300s)")
 
-    # 2. 启动 Notion 自动同步调度器
-    notion_db_id = "2c535e6b0ea580ce8170d8c0bebff29a"
-    sync_task = asyncio.create_task(auto_sync_scheduler(db_id=notion_db_id))
-    logger.info(f"🔄 Notion auto-sync scheduler started for DB: {notion_db_id}")
+    # 2. Notion 自动同步调度器 (已注释以节省调试资源)
+    # notion_db_id = "2c535e6b0ea580ce8170d8c0bebff29a"
+    # sync_task = asyncio.create_task(auto_sync_scheduler(db_id=notion_db_id))
+    # logger.info(f"🔄 Notion auto-sync scheduler started for DB: {notion_db_id}")
+    sync_task = None  # 保持变量定义但赋值为None
 
     yield
 
@@ -119,10 +120,14 @@ async def lifespan(app: FastAPI):
 
     # 优雅地取消所有后台任务
     cleanup_task.cancel()
-    sync_task.cancel()
+    if sync_task:  # 只有当sync_task存在时才取消
+        sync_task.cancel()
 
     try:
-        await asyncio.gather(cleanup_task, sync_task, return_exceptions=True)
+        tasks = [cleanup_task]
+        if sync_task:
+            tasks.append(sync_task)
+        await asyncio.gather(*tasks, return_exceptions=True)
     except asyncio.CancelledError:
         pass
     logger.info("✅ All background tasks gracefully shut down.")
