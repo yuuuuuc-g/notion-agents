@@ -1,3 +1,4 @@
+import uuid
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 from core.container import container
