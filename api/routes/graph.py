@@ -13,7 +13,7 @@ class GraphNode(BaseModel):
     name: str
     color: str
     val: int
-    content: str  # Changed from Optional to required
+    content: Optional[str] = None
 
 class GraphLink(BaseModel):
     source: str
@@ -50,7 +50,8 @@ async def get_graph_data(q: Optional[str] = Query(None)):
             id="center",
             name=f"检索: {q}",
             color="#ffffff",
-            val=20
+            val=20,
+            content=""
         )
 
         nodes = [center_node]
