@@ -61,10 +61,10 @@ async def get_graph_data(q: Optional[str] = Query(None)):
         seen_titles = {}  # 用于合并相同标题的笔记内容
         
         for hit in search_results["results"]:
-            logger.debug(f"DEBUG PAYLOAD: {hit.payload}")
+            payload = hit.get("payload", {})
+            logger.debug(f"DEBUG PAYLOAD: {payload}")
             
             # 提取标题
-            payload = hit.payload or {}
             metadata = payload.get("metadata", {})
             title = (
                 metadata.get("title") or 
