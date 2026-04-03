@@ -1,57 +1,109 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+"use client";
+
+import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import Drawer from "@mui/material/Drawer";
 import IconButton from "@mui/material/IconButton";
 import CloseIcon from "@mui/icons-material/Close";
+import SearchIcon from "@mui/icons-material/Search";
+import TextField from "@mui/material/TextField";
+import InputAdornment from "@mui/material/InputAdornment";
+import CircularProgress from "@mui/material/CircularProgress";
 
-// 避坑 1：仅在客户端动态加载力导向图引擎，彻底剥离 SSR
 const ForceGraph2D = dynamic(() => import("react-force-graph-2d"), {
   ssr: false,
 });
 
-// 避坑 2：必须是规范的默认导出 React 组件
 export default function TopologicalGraphPage() {
   const [mounted, setMounted] = useState(false);
   const [selectedNode, setSelectedNode] = useState<any>(null);
+  const [graphData, setGraphData] = useState({ nodes: [], links: [] });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
-  // 避坑 3：防止 Next.js 水合报错 (Hydration Mismatch)
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // 硬编码的测试数据
-  const graphData = useMemo(() => ({
-    nodes: [
-      { id: "center", name: "检索: 动词变位", color: "#ffffff", val: 20 },
-      // 西语库 (红色)
-      { id: "es1", name: "Ser vs Estar", color: "#ef4444", val: 10 },
-      { id: "es2", name: "Tener 用法", color: "#ef4444", val: 10 },
-      // 科技库 (蓝色)
-      { id: "tech1", name: "NLP 词法分析", color: "#3b82f6", val: 10 },
-      { id: "tech2", name: "Qdrant 向量距离", color: "#3b82f6", val: 10 },
-      // 人文库 (绿色)
-      { id: "hu1", name: "语言演化规律", color: "#10b981", val: 10 },
-    ],
-    links: [
-      { source: "center", target: "es1" },
-      { source: "center", target: "es2" },
-      { source: "center", target: "tech1" },
-      { source: "center", target: "tech2" },
-      { source: "center", target: "hu1" },
-      { source: "es1", target: "hu1" }, // 跨界灵感连接
-    ]
-  }), []);
+  const fetchGraphData = async (query: string) => {
+    if (!query.trim()) {
+      setGraphData({ nodes: [], links: [] });
+      return;
+    }
 
-  // 如果还没挂载到客户端，先渲染一个黑色全屏背景占位
+    setIsLoading(true);
+    try {
+      const response = await fetch(`http://localhost:8000/api/graph?q=${encodeURIComponent(query)}`);
+      if (!response.ok) throw new Error("Network response was not ok");
+      const data = await response.json();
+      setGraphData(data);
+    } catch (error) {
+      console.error("Error fetching graph data:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSearch = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      fetchGraphData(searchQuery);
+    }
+  };
+
   if (!mounted) {
     return <div style={{ background: "#1a1a1a", width: "100vw", height: "100vh" }} />;
   }
 
   return (
     <div style={{ width: "100vw", height: "100vh", background: "#1a1a1a", margin: 0, padding: 0, overflow: "hidden" }}>
-      {/* 核心拓扑图画布 */}
+      {/* Search Bar */}
+      <div style={{
+        position: "absolute",
+        top: 20,
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 100,
+        width: "400px"
+      }}>
+        <TextField
+          fullWidth
+          variant="outlined"
+          placeholder="Search your knowledge graph..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          onKeyDown={handleSearch}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon sx={{ color: "#aaa" }} />
+              </InputAdornment>
+            ),
+            endAdornment: isLoading ? (
+              <InputAdornment position="end">
+                <CircularProgress size={20} sx={{ color: "#aaa" }} />
+              </InputAdornment>
+            ) : null,
+            sx: {
+              background: "#222",
+              borderRadius: "4px",
+              "& .MuiOutlinedInput-notchedOutline": {
+                borderColor: "#444",
+              },
+              "&:hover .MuiOutlinedInput-notchedOutline": {
+                borderColor: "#666",
+              },
+              "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
+                borderColor: "#3b82f6",
+              },
+              color: "#fff",
+            }
+          }}
+        />
+      </div>
+
+      {/* Graph Canvas */}
       <ForceGraph2D
         graphData={graphData}
         nodeLabel="name"
@@ -60,7 +112,7 @@ export default function TopologicalGraphPage() {
         onNodeClick={(node) => setSelectedNode(node)}
       />
 
-      {/* 右侧优雅的详情抽屉 */}
+      {/* Node Details Drawer */}
       <Drawer
         anchor="right"
         open={!!selectedNode}
@@ -79,10 +131,11 @@ export default function TopologicalGraphPage() {
         </div>
         
         <div style={{ marginTop: "20px", color: "#aaa", lineHeight: 1.6 }}>
-          <p>这里是关于 <strong style={{ color: selectedNode?.color }}>{selectedNode?.name}</strong> 的详细笔记内容...</p>
-          <div style={{ marginTop: "30px", padding: "15px", background: "#111", borderRadius: "8px", fontSize: "0.9rem" }}>
-            (💡 未来这里将接入 Qdrant 向量数据库，并渲染真实的 Markdown 文本与 AI 对话框)
-          </div>
+          {selectedNode?.content ? (
+            <div dangerouslySetInnerHTML={{ __html: selectedNode.content }} />
+          ) : (
+            <p>No content available for this node.</p>
+          )}
         </div>
       </Drawer>
     </div>

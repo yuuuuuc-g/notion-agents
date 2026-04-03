@@ -41,6 +41,7 @@ try:
     from api.routes.files import router as files_router
     from api.routes.notion import router as notion_router
     from api.routes.system import router as system_router
+    from api.routes.graph import router as graph_router
 except ImportError as e:
     import sys
 
@@ -160,6 +161,7 @@ app.include_router(files_router, prefix="/api")
 app.include_router(notion_router, prefix="/api")
 app.include_router(system_router, prefix="/api")
 app.include_router(admin_router, prefix="/api/admin")
+app.include_router(graph_router, prefix="/api")
 
 # 静态文件（音频）
 app.mount(
