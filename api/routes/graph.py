@@ -13,7 +13,7 @@ class GraphNode(BaseModel):
     name: str
     color: str
     val: int
-    content: Optional[str] = None
+    content: str  # Changed from Optional to required
 
 class GraphLink(BaseModel):
     source: str
@@ -61,12 +61,23 @@ async def get_graph_data(q: Optional[str] = Query(None)):
             note_id = result.get("page_id", str(uuid.uuid4()))
             title = result.get("title", "Untitled")
             # Try multiple possible content fields from different vector store implementations
-            content = (
-                result.get("page_content") 
-                or result.get("content") 
-                or result.get("text") 
-                or ""
-            )
+            # Debug log the result structure
+            logger.debug(f"Search result structure: {result.keys()}")
+            
+            # Get content from the most likely fields
+            content = ""
+            if "page_content" in result:
+                content = result["page_content"]
+            elif "content" in result:
+                content = result["content"]
+            elif "text" in result:
+                content = result["text"]
+            elif "payload" in result and isinstance(result["payload"], dict):
+                # Try nested payload fields
+                payload = result["payload"]
+                content = payload.get("page_content", payload.get("content", payload.get("text", "")))
+            
+            logger.debug(f"Extracted content length: {len(content)}")
             
             # 根据分类确定节点颜色
             category = result.get("metadata", {}).get("category", "").lower()
