@@ -110,6 +110,36 @@ export default function TopologicalGraphPage() {
         nodeColor={(node: any) => node.color}
         linkColor={() => "rgba(255,255,255,0.2)"}
         onNodeClick={(node) => setSelectedNode(node)}
+        nodeCanvasObject={(node, ctx, globalScale) => {
+          // Draw node circle
+          const label = node.name;
+          const fontSize = 12 / globalScale;
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, 5, 0, 2 * Math.PI, false);
+          ctx.fillStyle = node.color;
+          ctx.fill();
+
+          // Draw text label
+          ctx.font = `${fontSize}px Sans-Serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          
+          // Add text background for better readability
+          const textWidth = ctx.measureText(label).width;
+          const bckgDimensions = [textWidth, fontSize].map(n => n + fontSize * 0.2); // some padding
+          
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+          ctx.fillRect(
+            node.x - bckgDimensions[0] / 2,
+            node.y + 8, // Position below node
+            bckgDimensions[0],
+            bckgDimensions[1]
+          );
+          
+          // Draw text
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(label, node.x, node.y + 8 + fontSize / 2);
+        }}
       />
 
       {/* Node Details Drawer */}
