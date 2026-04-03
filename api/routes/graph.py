@@ -90,7 +90,7 @@ async def get_graph_data(q: Optional[str] = Query(None)):
             }
             
             # 根据分类确定节点颜色
-            category = result.get("metadata", {}).get("category", "").lower()
+            category = metadata.get("category", "").lower()
             if "spanish" in category:
                 color = "#ef4444"  # 西语-红色
             elif "tech" in category:
