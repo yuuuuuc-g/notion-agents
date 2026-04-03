@@ -1,4 +1,5 @@
 import uuid
+import uuid
 from fastapi import APIRouter, Query, HTTPException
 from typing import Optional
 from core.container import container
@@ -37,11 +38,13 @@ async def get_graph_data(q: Optional[str] = Query(None)):
         vector_store = container.vector_store()
         
         # 搜索最相关的6篇笔记
-        search_results = await vector_store.search(
+        search_results = vector_store.search_with_context(
             query=q,
-            limit=6,
-            with_payload=True
+            top_k=6
         )
+
+        if not search_results["match"]:
+            return {"nodes": [], "links": []}
 
         # 构建中心节点
         center_node = GraphNode(
@@ -55,14 +58,10 @@ async def get_graph_data(q: Optional[str] = Query(None)):
         links = []
         
         # 处理每篇笔记
-        for result in search_results:
-            if not result.payload:
-                continue
-                
-            payload = result.payload
-            note_id = str(result.id)
-            title = payload.get("title", "Untitled")
-            content = payload.get("content", "")
+        for result in search_results["results"]:
+            note_id = result.get("page_id", str(uuid.uuid4()))
+            title = result.get("title", "Untitled")
+            content = result.get("content", "")
             
             # 根据分类确定节点颜色
             category = payload.get("category", "").lower()
