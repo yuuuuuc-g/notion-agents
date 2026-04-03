@@ -160,11 +160,32 @@ export default function TopologicalGraphPage() {
           </IconButton>
         </div>
         
-        <div style={{ marginTop: "20px", color: "#aaa", lineHeight: 1.6 }}>
+        <div style={{ 
+          marginTop: "20px",
+          height: "calc(100vh - 100px)",
+          overflowY: "auto",
+          paddingRight: "10px"
+        }}>
           {selectedNode?.content ? (
-            <div dangerouslySetInnerHTML={{ __html: selectedNode.content }} />
+            <div 
+              style={{
+                color: "#d1d5db",
+                fontSize: "0.9rem",
+                lineHeight: 1.6,
+                whiteSpace: "pre-wrap",
+                fontFamily: "monospace"
+              }}
+              dangerouslySetInnerHTML={{ __html: selectedNode.content }}
+            />
           ) : (
-            <p>No content available for this node.</p>
+            <p style={{ 
+              color: "#6b7280",
+              fontStyle: "italic",
+              textAlign: "center",
+              marginTop: "2rem"
+            }}>
+              暂无详细内容
+            </p>
           )}
         </div>
       </Drawer>
