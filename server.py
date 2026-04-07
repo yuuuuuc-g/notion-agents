@@ -39,9 +39,9 @@ try:
     from api.routes.admin import router as admin_router
     from api.routes.chat import router as chat_router
     from api.routes.files import router as files_router
+    from api.routes.graph import router as graph_router
     from api.routes.notion import router as notion_router
     from api.routes.system import router as system_router
-    from api.routes.graph import router as graph_router
 except ImportError as e:
     import sys
 
@@ -107,11 +107,11 @@ async def lifespan(app: FastAPI):
     cleanup_task = asyncio.create_task(auto_cleanup_scheduler())
     logger.info("🔄 Auto cleanup scheduler started (interval: 300s)")
 
-    # 2. Notion 自动同步调度器 (已注释以节省调试资源)
-    # notion_db_id = "2c535e6b0ea580ce8170d8c0bebff29a"
-    # sync_task = asyncio.create_task(auto_sync_scheduler(db_id=notion_db_id))
-    # logger.info(f"🔄 Notion auto-sync scheduler started for DB: {notion_db_id}")
-    sync_task = None  # 保持变量定义但赋值为None
+    # 2. Notion 自动同步调度器
+    notion_db_id = "2c535e6b0ea580ce8170d8c0bebff29a"
+    logger.info(f"🚀 [Startup] Creating auto-sync task for DB: {notion_db_id}...")
+    sync_task = asyncio.create_task(auto_sync_scheduler(db_id=notion_db_id))
+    logger.info("✅ [Startup] Notion auto-sync scheduler task created and running.")
 
     yield
 
@@ -119,17 +119,16 @@ async def lifespan(app: FastAPI):
     logger.info("🛑 Biobrain Server shutting down...")
 
     # 优雅地取消所有后台任务
+    logger.info("🛑 [Shutdown] Cancelling cleanup_task...")
     cleanup_task.cancel()
-    if sync_task:  # 只有当sync_task存在时才取消
-        sync_task.cancel()
+    logger.info("🛑 [Shutdown] Cancelling sync_task...")
+    sync_task.cancel()
 
     try:
-        tasks = [cleanup_task]
-        if sync_task:
-            tasks.append(sync_task)
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(cleanup_task, sync_task, return_exceptions=True)
+        logger.info("✅ [Shutdown] All background tasks cancelled successfully.")
     except asyncio.CancelledError:
-        pass
+        logger.info("✅ [Shutdown] Tasks cancelled (CancelledError caught).")
     logger.info("✅ All background tasks gracefully shut down.")
 
 
@@ -149,8 +148,12 @@ app.state.limiter = limiter
 # 中间件
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,  # 🔥 修复: * 不能和 credentials=True 同时用
+    allow_origins=[
+        "http://localhost:3000",  # 本地开发
+        "https://gaoyucan.com",  # 生产环境主域名
+        "https://www.gaoyucan.com",  # 备用域名
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -169,6 +172,7 @@ app.include_router(admin_router, prefix="/api/admin")
 app.include_router(graph_router, prefix="/api")
 
 # 静态文件（音频）
+os.makedirs(SETTINGS.AUDIO_DIR, exist_ok=True)  # 🔥 关键修复：在挂载前强制创建目录！
 app.mount(
     "/generated_audio",
     StaticFiles(directory=SETTINGS.AUDIO_DIR),

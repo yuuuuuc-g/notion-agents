@@ -64,7 +64,15 @@ class Settings(BaseSettings):
     # === 7. CORS与网络 ===
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
 
-    # === 8. 模型内存优化配置 ===
+    # === 8. 向量数据库 (Qdrant) ===
+    # 云端优先：同时设置 QDRANT_URL 和 QDRANT_API_KEY 时连接云端，否则回退本地
+    QDRANT_URL: Optional[str] = None
+    QDRANT_API_KEY: Optional[str] = None
+    QDRANT_HOST: str = "localhost"
+    QDRANT_PORT: int = 6333
+    QDRANT_COLLECTION: str = "biobrain_memory_hybrid"
+
+    # === 9. 模型内存优化配置 ===
     # 控制是否启用稀疏模型以节省内存
     ENABLE_SPARSE_MODEL: bool = True
     # 控制是否启用重排序模型以节省内存

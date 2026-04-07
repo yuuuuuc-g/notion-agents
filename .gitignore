@@ -92,3 +92,4 @@ biobrain_complete_export_*.txt
 *.sqlite
 biobrain_complete_export_*.txt
 .gitnexus
+.aider*

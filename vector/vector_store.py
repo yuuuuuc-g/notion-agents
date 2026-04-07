@@ -331,9 +331,44 @@ class LevelChunkVectorStore(IVectorStore):
         }
 
     def _connect(self):
-        logger.info(f"🚀 Connecting to Qdrant at {self.host}:{self.port}...")
+        # 优先从 SETTINGS 读取云端配置，确保 .env 已被 pydantic-settings 加载；
+        # 若 SETTINGS 不可用则回退到 os.getenv，最后才降级到 localhost。
+        if CONFIG_AVAILABLE and SETTINGS:
+            qdrant_url = getattr(SETTINGS, "QDRANT_URL", None) or os.getenv(
+                "QDRANT_URL"
+            )
+            qdrant_api_key = getattr(SETTINGS, "QDRANT_API_KEY", None) or os.getenv(
+                "QDRANT_API_KEY"
+            )
+        else:
+            # SETTINGS 不可用时手动加载 .env，防止环境变量未注入
+            try:
+                from dotenv import load_dotenv
+
+                load_dotenv()
+                logger.warning(
+                    "⚠️ SETTINGS unavailable, loaded .env via python-dotenv as fallback."
+                )
+            except ImportError:
+                logger.warning(
+                    "⚠️ python-dotenv not installed, relying on system environment variables."
+                )
+            qdrant_url = os.getenv("QDRANT_URL")
+            qdrant_api_key = os.getenv("QDRANT_API_KEY")
+
         try:
-            client = QdrantClient(host=self.host, port=self.port)
+            if qdrant_url and qdrant_api_key:
+                logger.info(f"🚀 Connecting to Qdrant Cloud at {qdrant_url}...")
+                client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
+            else:
+                # 两个云端变量均为空才允许回退到本地
+                local_host = os.getenv("QDRANT_HOST", "localhost")
+                local_port = int(os.getenv("QDRANT_PORT", 6333))
+                logger.warning(
+                    f"⚠️ QDRANT_URL / QDRANT_API_KEY not set, falling back to local Qdrant at {local_host}:{local_port}."
+                )
+                client = QdrantClient(host=local_host, port=local_port)
+
             self._ensure_collection(client)
             self._client = client
             logger.info("✅ Qdrant Connection Established.")
