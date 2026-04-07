@@ -69,8 +69,9 @@ export default function GraphPage() {
 
     setLoading(true);
     try {
+      // 通过 Next.js 代理路由转发，由服务端注入 x-api-key，避免密钥暴露到浏览器
       const response = await fetch(
-        `http://localhost:8000/api/graph?q=${encodeURIComponent(query)}`
+        `/api/graph?q=${encodeURIComponent(query)}`
       );
       if (!response.ok) throw new Error("Network response was not ok");
       const data = await response.json();
@@ -104,8 +105,9 @@ export default function GraphPage() {
 
     setExpanding(true);
     try {
+      // 通过 Next.js 代理路由转发，由服务端注入 x-api-key
       const response = await fetch(
-        `http://localhost:8000/api/graph/expand/${nodeId}?limit=5`
+        `/api/graph/expand/${nodeId}?limit=5`
       );
       if (!response.ok) throw new Error("Expand request failed");
 
